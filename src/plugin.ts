@@ -69,7 +69,6 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       if (hasExplicitInput) return;
 
       return {
-        appType: 'custom',
         build: {
           rollupOptions: {
             input: VIRTUAL_BUILD_ENTRY_ID,
