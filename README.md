@@ -1,4 +1,4 @@
-# vite-plugin-ht-pages
+# vite-plugin-htjs-pages
 
 A lightweight Vite plugin for generating static HTML from `*.ht.js` page modules.
 
@@ -24,7 +24,7 @@ This makes it ideal for **blogs, documentation sites, and marketing pages** wher
 # Installation
 
 ```bash
-npm install vite-plugin-ht-pages --save-dev
+npm install vite-plugin-htjs-pages --save-dev
 ```
 
 ---
@@ -35,7 +35,7 @@ npm install vite-plugin-ht-pages --save-dev
 
 ```ts
 import { defineConfig } from 'vite'
-import { htPages } from 'vite-plugin-ht-pages'
+import { htPages } from 'vite-plugin-htjs-pages'
 
 export default defineConfig({
   plugins: [htPages()]
@@ -484,7 +484,7 @@ This keeps memory usage stable during builds.
 |----|----|
 | Astro | full framework |
 | Next.js | SSR framework |
-| vite-plugin-ht-pages | minimal static HTML generation |
+| vite-plugin-htjs-pages | minimal static HTML generation |
 
 This plugin intentionally stays **small and unopinionated**.
 

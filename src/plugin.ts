@@ -61,7 +61,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   }
 
   return {
-    name: 'vite-plugin-ht-pages',
+    name: 'vite-plugin-htjs-pages',
 
     configResolved(resolved) {
       config = resolved;
@@ -101,7 +101,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
     async generateBundle() {
       const entries = await discoverEntryPages(root, options);
-      const cacheDir = path.join(root, 'node_modules/.cache/vite-plugin-ht-pages');
+      const cacheDir = path.join(root, 'node_modules/.cache/vite-plugin-htjs-pages');
 
       const entriesKey = createEntriesKey(entries);
 
