@@ -1,0 +1,35 @@
+{
+  "name": "vite-plugin-htjs-pages",
+  "author": "Paul Browne",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "Small HT.js pages plugin for Vite with dynamic routes, catch-all routes, and static params",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "vite": "^5 || ^6"
+  },
+  "dependencies": {
+    "fast-glob": "^3.3.3",
+    "p-limit": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "rollup": "^4.34.6",
+    "tsup": "^8.3.6",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.0"
+  }
+}
