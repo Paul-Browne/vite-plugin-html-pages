@@ -10,6 +10,8 @@ import { buildRenderBundle } from './render-bundle';
 import { renderPage } from './render-runtime';
 import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
 
+const VIRTUAL_BUILD_ENTRY_ID = '\0vite-plugin-ht-pages:build-entry';
+
 function chunkArray<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) {
@@ -34,10 +36,7 @@ async function importManifest(bundlePath: string): Promise<Array<{ page: HtPageI
 export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   let root = process.cwd();
   let server: ViteDevServer | null = null;
-  let config: ResolvedConfig;
   let devPages: HtPageInfo[] = [];
-  let cachedManifestKey: string | null = null;
-  let cachedBundlePath: string | null = null;
   const cleanUrls = options.cleanUrls ?? true;
 
   async function loadDevPages(): Promise<HtPageInfo[]> {
@@ -61,10 +60,37 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   }
 
   return {
-    name: 'vite-plugin-htjs-pages',
+    name: 'vite-plugin-ht-pages',
+
+    config(userConfig) {
+      const hasExplicitInput =
+        userConfig.build?.rollupOptions?.input != null;
+
+      if (hasExplicitInput) return;
+
+      return {
+        appType: 'custom',
+        build: {
+          rollupOptions: {
+            input: VIRTUAL_BUILD_ENTRY_ID,
+          },
+        },
+      };
+    },
+
+    resolveId(id) {
+      if (id === VIRTUAL_BUILD_ENTRY_ID) return id;
+      return null;
+    },
+
+    load(id) {
+      if (id === VIRTUAL_BUILD_ENTRY_ID) {
+        return 'export default {};';
+      }
+      return null;
+    },
 
     configResolved(resolved) {
-      config = resolved;
       root = resolved.root;
     },
 
@@ -101,22 +127,12 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
     async generateBundle() {
       const entries = await discoverEntryPages(root, options);
-      const cacheDir = path.join(root, 'node_modules/.cache/vite-plugin-htjs-pages');
-
-      const entriesKey = createEntriesKey(entries);
-
-      let bundlePath: string;
-      if (cachedBundlePath && cachedManifestKey === entriesKey) {
-        bundlePath = cachedBundlePath;
-      } else {
-        bundlePath = await buildRenderBundle({
-          entries,
-          cacheDir,
-          ssrPlugins: options.ssrPlugins,
-        });
-        cachedManifestKey = entriesKey;
-        cachedBundlePath = bundlePath;
-      }
+      const cacheDir = path.join(root, 'node_modules/.cache/vite-plugin-ht-pages');
+      const bundlePath = await buildRenderBundle({
+        entries,
+        cacheDir,
+        ssrPlugins: options.ssrPlugins,
+      });
 
       const manifest = await importManifest(bundlePath);
       const modulesByEntry = new Map<string, HtPageModule>();
