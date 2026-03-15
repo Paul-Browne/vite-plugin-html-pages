@@ -5,7 +5,7 @@ import { rollup, type Plugin as RollupPlugin } from 'rollup';
 import { createManifestModule } from './manifest';
 import type { HtPageInfo } from './types';
 
-const VIRTUAL_MANIFEST_ID = '\0virtual:ht-pages-manifest';
+const VIRTUAL_MANIFEST_ID = '\0virtual:htjs-pages-manifest';
 
 export async function buildRenderBundle(args: {
   entries: HtPageInfo[];
@@ -23,7 +23,7 @@ export async function buildRenderBundle(args: {
     input: VIRTUAL_MANIFEST_ID,
     plugins: [
       {
-        name: 'ht-pages:virtual-manifest',
+        name: 'htjs-pages:virtual-manifest',
         resolveId(id) {
           return id === VIRTUAL_MANIFEST_ID ? id : null;
         },

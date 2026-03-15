@@ -10,7 +10,7 @@ import { buildRenderBundle } from './render-bundle';
 import { renderPage } from './render-runtime';
 import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
 
-const VIRTUAL_BUILD_ENTRY_ID = '\0vite-plugin-ht-pages:build-entry';
+const VIRTUAL_BUILD_ENTRY_ID = '\0vite-plugin-htjs-pages:build-entry';
 
 function chunkArray<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -60,7 +60,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   }
 
   return {
-    name: 'vite-plugin-ht-pages',
+    name: 'vite-plugin-htjs-pages',
 
     config(userConfig) {
       const hasExplicitInput =
@@ -127,7 +127,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
     async generateBundle() {
       const entries = await discoverEntryPages(root, options);
-      const cacheDir = path.join(root, 'node_modules/.cache/vite-plugin-ht-pages');
+      const cacheDir = path.join(root, 'node_modules/.cache/vite-plugin-htjs-pages');
       const bundlePath = await buildRenderBundle({
         entries,
         cacheDir,

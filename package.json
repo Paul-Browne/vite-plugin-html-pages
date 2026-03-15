@@ -1,7 +1,7 @@
 {
   "name": "vite-plugin-htjs-pages",
   "author": "Paul Browne",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "description": "Small HT.js pages plugin for Vite with dynamic routes, catch-all routes, and static params",
   "main": "./dist/index.cjs",
