@@ -1,23 +1,18 @@
 # vite-plugin-htjs-pages
 
-[![npm
-version](https://img.shields.io/npm/v/vite-plugin-htjs-pages.svg)](https://www.npmjs.com/package/vite-plugin-htjs-pages)
-[![npm
-downloads](https://img.shields.io/npm/dm/vite-plugin-htjs-pages.svg)](https://www.npmjs.com/package/vite-plugin-htjs-pages)
+[![npm version](https://img.shields.io/npm/v/vite-plugin-htjs-pages.svg)](https://www.npmjs.com/package/vite-plugin-htjs-pages)
+[![npm downloads](https://img.shields.io/npm/dm/vite-plugin-htjs-pages.svg)](https://www.npmjs.com/package/vite-plugin-htjs-pages)
 [![license](https://img.shields.io/npm/l/vite-plugin-htjs-pages.svg)](LICENSE)
 [![vite](https://img.shields.io/badge/vite-plugin-646CFF?logo=vite&logoColor=white)](https://vitejs.dev)
 
-Minimal **static site generation (SSG) for Vite** using JavaScript
-functions that return HTML.
+Minimal **static site generation for Vite** using JavaScript files that return HTML.
 
 Generate static HTML pages from `*.ht.js` modules using Vite and
 [`javascript-to-html`](https://www.npmjs.com/package/javascript-to-html).
 
 ⭐ If this project helps you, please consider starring it.
 
-------------------------------------------------------------------------
-
-## Built for the Vite ecosystem
+# Built for the Vite ecosystem
 
 Works seamlessly with:
 
@@ -28,69 +23,66 @@ Works seamlessly with:
 A minimal **static site generator for Vite** that keeps pages as simple
 JavaScript functions returning HTML.
 
-------------------------------------------------------------------------
+---
 
-# Features
+# TL;DR
 
--   File‑based routing
--   Dynamic routes (`[slug].ht.js`)
--   Catch‑all routes (`[...slug].ht.js`)
--   Static params generation (`generateStaticParams()`)
--   Dev server SSR rendering
--   Clean URL support
--   Parallel batched page rendering
--   Automatic `404.html`
--   Automatic `sitemap.xml`
--   Optional `rss.xml` generation
--   Debug mode for easier troubleshooting
-
-------------------------------------------------------------------------
-
-## TL;DR
-
-Write:
+Write this:
 
 ```js
 // src/index.ht.js
-
-import { fragment, html, body, head, title, h1 } from 'javascript-to-html'
+import { fragment, html, body, h1 } from "javascript-to-html"
 
 export default () => fragment(
-  '<!doctype html>',
-  html({lang: "en"},
-    head(
-      title("My website")
-    ),
+  "<!doctype html>",
+  html(
     body(
-      h1('Hello world')
+      h1("Hello world")
     )
   )
 )
 ```
 
-Run: 
+Run:
 
-``` bash
+```bash
 vite build
 ```
 
 Get:
 
-```html
-<!-- dist/index.html -->
- 
-<!doctype html>
-<html lang="en">
-  <head>
-    <title>My website</title>
-  </head>
-  <body>
-    <h1>Hello world</h1>
-  </body>
-</html>
+```
+dist/index.html
 ```
 
-------------------------------------------------------------------------
+---
+
+# Features
+
+- File-based routing
+- Dynamic routes `[slug]`
+- Multiple parameters `[year]/[slug]`
+- Catch-all routes `[...slug]`
+- Optional catch-all routes `[...slug]?`
+- Route groups `(admin)/users.ht.js`
+- Index routes `blog/[slug]/index.ht.js`
+- Static params generation
+- Dev server SSR rendering
+- Parallel static generation
+- Automatic `404.html`
+- Automatic `sitemap.xml`
+- Optional RSS feed generation
+- Debug logging
+
+---
+
+# Installation
+
+```bash
+npm install vite-plugin-htjs-pages javascript-to-html
+```
+
+---
 
 # Why this exists
 
@@ -118,110 +110,75 @@ It gives you:
 
 while keeping pages as **simple JavaScript functions that return HTML**.
 
-------------------------------------------------------------------------
-
-# How it works
-
-    src/index.ht.js
-    src/blog/[slug].ht.js
-            │
-            ▼
-     vite-plugin-htjs-pages
-            │
-            ▼
-    dist/index.html
-    dist/blog/hello-world/index.html
-
-Pages are just **JavaScript functions that return HTML**.
-
-------------------------------------------------------------------------
-
-# Installation
-
-``` bash
-npm install vite-plugin-htjs-pages javascript-to-html
-```
-
-------------------------------------------------------------------------
+---
 
 # Quick Start
 
-### 1. Configure Vite
+### vite.config.js
 
-``` js
-import { defineConfig } from 'vite'
-import { htPages } from 'vite-plugin-htjs-pages'
+```js
+import { defineConfig } from "vite"
+import { htPages } from "vite-plugin-htjs-pages"
 
 export default defineConfig({
   plugins: [htPages()]
 })
 ```
 
-### 2. Create a page
+---
 
-    src/index.ht.js
+# Example Project Structure
 
-``` js
-import { fragment, html, head, body, title, h1 } from 'javascript-to-html'
+```
+src/
 
-export default () => fragment(
-  '<!doctype html>',
-  html(
-    head(
-      title('Hello world')
-    ),
-    body(
-      h1('Hello world')
-    )
-  )
-)
+  index.ht.js
+  about.ht.js
+
+  blog/
+    index.ht.js
+    [slug].ht.js
+    [year]/[slug].ht.js
+
+  docs/
+    [...slug]?.ht.js
+
+  (admin)/
+    users.ht.js
 ```
 
-### 3. Run dev server
+---
 
-``` bash
-vite
-```
+# Routing
 
-### 4. Build
+Routes are generated directly from the filesystem.
 
-``` bash
-vite build
-```
+| File | URL |
+|-----|-----|
+| `index.ht.js` | `/` |
+| `about.ht.js` | `/about` |
+| `blog/[slug].ht.js` | `/blog/my-post` |
+| `blog/[year]/[slug].ht.js` | `/blog/2026/my-post` |
+| `docs/[...slug].ht.js` | `/docs/api/auth/login` |
+| `docs/[...slug]?.ht.js` | `/docs` or `/docs/getting-started` |
+| `(admin)/users.ht.js` | `/users` |
 
-Output:
-
-    dist/index.html
-
-------------------------------------------------------------------------
-
-# File‑Based Routing
-
-Routes are derived from the filesystem.
-
-    src/
-
-      index.ht.js
-      about.ht.js
-
-      blog/
-        [slug].ht.js
-
-      docs/
-        [...slug].ht.js
-
-Produces:
-
-    /index.html
-    /about/index.html
-    /blog/hello-world/index.html
-    /docs/getting-started/index.html
-
-------------------------------------------------------------------------
+---
 
 # Dynamic Routes
 
-    src/blog/[slug].ht.js
+```
+src/blog/[slug].ht.js
+```
+
+Matches:
+
+```
+/blog/hello-world
+/blog/my-first-post
+```
+
+Example:
 
 ``` js
 import { fragment, html, body, h1 } from 'javascript-to-html'
@@ -229,7 +186,7 @@ import { fragment, html, body, h1 } from 'javascript-to-html'
 export function generateStaticParams() {
   return [
     { slug: 'hello-world' },
-    { slug: 'deep-dive' }
+    { slug: 'my-first-post' }
   ]
 }
 
@@ -243,21 +200,127 @@ export default ({ params }) => fragment(
 )
 ```
 
-------------------------------------------------------------------------
+---
+
+# Multiple Parameters
+
+```
+src/blog/[year]/[slug].ht.js
+```
+
+Matches:
+
+```
+/blog/2026/vite-routing
+```
+
+Params:
+
+```
+params.year
+params.slug
+```
+
+---
+
+# Catch-All Routes
+
+```
+src/docs/[...slug].ht.js
+```
+
+Matches:
+
+```
+/docs/api/auth/login
+/docs/guides/rendering/static
+```
+
+Params:
+
+```
+params.slug === "api/auth/login"
+```
+
+---
+
+# Optional Catch-All Routes
+
+```
+src/docs/[...slug]?.ht.js
+```
+
+Matches both:
+
+```
+/docs
+/docs/getting-started
+/docs/api/auth/login
+```
+
+Params:
+
+| URL | params.slug |
+|-----|-------------|
+| `/docs` | "" |
+| `/docs/api` | "api" |
+| `/docs/api/auth` | "api/auth" |
+
+---
+
+# Route Groups
+
+Folders wrapped in parentheses are ignored in URLs.
+
+```
+src/(admin)/users.ht.js
+```
+
+URL:
+
+```
+/users
+```
+
+---
+
+# Index Routes
+
+Files named `index.ht.js` map to the parent route.
+
+```
+src/blog/index.ht.js        -> /blog
+src/blog/[slug]/index.ht.js -> /blog/my-post
+```
+
+---
+
+# Static Params
+
+Dynamic routes can export `generateStaticParams`.
+
+```js
+export function generateStaticParams() {
+  return [
+    { slug: "hello-world" },
+    { slug: "vite-routing" }
+  ]
+}
+```
+
+---
 
 # Data Loading
 
 Pages can export a `data()` function.
 
-``` js
+```js
 export async function data({ params }) {
-  return {
-    title: params.slug
-  }
+  return { title: params.slug }
 }
 ```
 
-------------------------------------------------------------------------
+---
 
 # Layouts
 
@@ -277,37 +340,29 @@ export default (...content) => fragment(
 )
 ```
 
-------------------------------------------------------------------------
+---
 
 # Plugin Options
-
-``` js
-htPages({
-  cleanUrls: true,
-  renderConcurrency: 8,
-  renderBatchSize: 64
-})
-```
 
 | Option | Description |
 |------|------|
 | `pagesDir` | root directory for pages |
-| `include` | page glob pattern |
-| `exclude` | excluded patterns |
+| `include` | page glob |
+| `exclude` | excluded files |
 | `cleanUrls` | `/page/index.html` instead of `/page.html` |
-| `renderConcurrency` | concurrent page renders |
-| `renderBatchSize` | render batch size |
+| `renderConcurrency` | parallel rendering |
+| `renderBatchSize` | batch size |
 | `debug` | enable debug logging |
-| `site` | base URL used for sitemap |
-| `rss` | configuration for RSS feed |
+| `site` | base URL for sitemap |
+| `rss` | RSS configuration |
 
-------------------------------------------------------------------------
+---
 
 # Debug Mode
 
-Enable debug logs when troubleshooting builds or routing.
+Enable debug logging when troubleshooting.
 
-``` js
+```js
 htPages({
   debug: true
 })
@@ -322,38 +377,21 @@ Example output:
 This helps diagnose routing or build issues without modifying plugin
 code.
 
-------------------------------------------------------------------------
+---
 
 # Automatic Sitemap
 
-The plugin automatically generates:
+A `sitemap.xml` is generated automatically.
 
-    dist/sitemap.xml
-
-Example:
-
-``` xml
-<urlset>
-  <url><loc>/</loc></url>
-  <url><loc>/blog/hello-world</loc></url>
-</urlset>
+```
+dist/sitemap.xml
 ```
 
-If you configure a `site` option, URLs become absolute:
+---
 
-``` js
-htPages({
-  site: "https://example.com"
-})
-```
+# Optional RSS Feed
 
-------------------------------------------------------------------------
-
-# Automatic RSS Feed
-
-Optional RSS feed generation for blogs.
-
-``` js
+```js
 htPages({
   rss: {
     site: "https://example.com",
@@ -364,35 +402,36 @@ htPages({
 })
 ```
 
-This generates:
+Produces:
 
-    dist/rss.xml
-
-Example item:
-
-``` xml
-<item>
-  <title>/blog/hello-world</title>
-  <link>https://example.com/blog/hello-world</link>
-</item>
+```
+dist/rss.xml
 ```
 
-------------------------------------------------------------------------
+---
 
-# Performance Tips
+# Performance
 
-Large sites (500+ pages):
+Large sites can increase concurrency:
 
-``` js
+```js
 htPages({
   renderConcurrency: 16,
   renderBatchSize: 128
 })
 ```
 
-This keeps memory usage stable during large builds.
+---
 
-------------------------------------------------------------------------
+# Comparison
+
+| Tool | Focus |
+|-----|-----|
+| Astro | component‑based SSG |
+| Next.js | React SSR framework |
+| vite-plugin-htjs-pages | minimal HTML SSG for Vite |
+
+---
 
 # Use Cases
 
@@ -406,17 +445,7 @@ This keeps memory usage stable during large builds.
 -   **Minimal static site generators**
 -   **HTML‑first Vite projects**
 
-------------------------------------------------------------------------
-
-# Comparison
-
-| Tool | Focus |
-|-----|-----|
-| Astro | component framework |
-| Next.js | SSR framework |
-| vite-plugin-htjs-pages | minimal static HTML generation |
-
-------------------------------------------------------------------------
+---
 
 # License
 

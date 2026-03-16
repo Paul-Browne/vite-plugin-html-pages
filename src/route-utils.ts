@@ -5,6 +5,7 @@ const DYNAMIC_SEGMENT_RE = /\[([A-Za-z0-9_]+)\]/g;
 const CATCH_ALL_SEGMENT_RE = /\[\.\.\.([A-Za-z0-9_]+)\]/g;
 const OPTIONAL_CATCH_ALL_SEGMENT_RE = /\[\.\.\.([A-Za-z0-9_]+)\]\?/g;
 const ANY_PARAM_RE = /\[(?:\.\.\.)?([A-Za-z0-9_]+)\]\??/g;
+const ROUTE_GROUP_RE = /(^|\/)\(([^)]+)\)(?=\/|$)/g;
 
 export function getParamNames(relativeFromPagesDir: string): string[] {
   return [...relativeFromPagesDir.matchAll(ANY_PARAM_RE)].map((m) => m[1]);
@@ -17,8 +18,10 @@ export function isDynamicPage(relativeFromPagesDir: string): boolean {
 export function toRoutePattern(relativeFromPagesDir: string): string {
   const noExt = stripHtSuffix(toPosix(relativeFromPagesDir));
 
-  const raw = noExt
-    .replace(/(^|\/)index$/i, '$1')
+  const withoutGroups = noExt.replace(ROUTE_GROUP_RE, '$1');
+  const withoutIndex = withoutGroups.replace(/\/index$/i, '').replace(/^index$/i, '');
+
+  const raw = withoutIndex
     .replace(OPTIONAL_CATCH_ALL_SEGMENT_RE, '*?:$1')
     .replace(CATCH_ALL_SEGMENT_RE, '*:$1')
     .replace(DYNAMIC_SEGMENT_RE, ':$1');
@@ -30,10 +33,9 @@ export function fillParams(
   pattern: string,
   params: Record<string, string>,
 ): string {
-  return pattern
+  const result = pattern
     .replace(/\*\?:([A-Za-z0-9_]+)/g, (_, key) => {
       const value = params[key];
-
       if (value == null || value === '') {
         return '';
       }
@@ -59,9 +61,9 @@ export function fillParams(
       }
 
       return encodeURIComponent(params[key]);
-    })
-    .replace(/\/+/g, '/')
-    .replace(/\/$/, '') || '/';
+    });
+
+  return normalizeRoutePath(result || '/');
 }
 
 export function fileNameFromRoute(
@@ -86,9 +88,7 @@ export function expandStaticPaths(
       Object.entries(row).map(([k, v]) => [k, String(v)]),
     );
 
-    const routePath = normalizeRoutePath(
-      fillParams(basePage.routePattern, params),
-    );
+    const routePath = fillParams(basePage.routePattern, params);
 
     return {
       ...basePage,
@@ -119,10 +119,7 @@ export function routeMatch(
 
     if (patternSeg.startsWith('*:')) {
       const rest = b.slice(i);
-
-      if (rest.length === 0) {
-        return null;
-      }
+      if (rest.length === 0) return null;
 
       params[patternSeg.slice(2)] = rest.map(decodeURIComponent).join('/');
       return params;
@@ -172,5 +169,6 @@ export function compareRoutePriority(a: string, b: string): number {
     }
   }
 
-  return 0;
+  // More specific / longer routes first when otherwise equal
+  return bSegs.length - aSegs.length;
 }
