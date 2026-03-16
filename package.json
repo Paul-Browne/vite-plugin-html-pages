@@ -17,13 +17,13 @@
     "blog-generator"
   ],  
   "description": "Minimal static site generation (SSG) for Vite using JavaScript functions that return HTML",
-  "homepage": "https://github.com/paulbrowne/vite-plugin-htjs-pages",
+  "homepage": "https://github.com/paul-browne/vite-plugin-htjs-pages",
   "repository": {
     "type": "git",
-    "url": "https://github.com/paulbrowne/vite-plugin-htjs-pages.git"
+    "url": "https://github.com/paul-browne/vite-plugin-htjs-pages.git"
   },
   "bugs": {
-    "url": "https://github.com/paulbrowne/vite-plugin-htjs-pages/issues"
+    "url": "https://github.com/paul-browne/vite-plugin-htjs-pages/issues"
   },
   "main": "./dist/index.js",
   "module": "./dist/index.js",
