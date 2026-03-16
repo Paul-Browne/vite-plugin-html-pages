@@ -1,0 +1,2 @@
+- caching for API fetching inside generateStaticParams() and data() like getCachedData.js
+- `export const dynamic = true` to disable static generation for specific routes
