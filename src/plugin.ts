@@ -1,6 +1,5 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createHash } from 'node:crypto';
 import pLimit from 'p-limit';
 import type { Plugin, ViteDevServer } from 'vite';
 
@@ -11,32 +10,18 @@ import { buildRenderBundle } from './render-bundle';
 import { renderPage } from './render-runtime';
 
 import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
-import { PLUGIN_NAME, VIRTUAL_BUILD_ENTRY_ID, CACHE_DIR_NAME } from './constants';
+import {
+  PLUGIN_NAME,
+  VIRTUAL_BUILD_ENTRY_ID,
+  CACHE_DIR_NAME,
+} from './constants';
 
 function chunkArray<T>(items: T[], size: number): T[][] {
-  const safeSize = Math.max(1, Math.floor(size));
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += safeSize) {
-    out.push(items.slice(i, i + safeSize));
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
   }
   return out;
-}
-
-function escapeXml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-function createEntriesKey(entries: HtPageInfo[]): string {
-  const raw = entries
-    .map((e) => `${e.entryPath}|${e.routePattern}|${e.dynamic}`)
-    .join('\n');
-
-  return createHash('sha256').update(raw).digest('hex');
 }
 
 async function importManifest(
@@ -51,10 +36,6 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   let server: ViteDevServer | null = null;
   let devPages: HtPageInfo[] = [];
 
-  let cachedManifestKey: string | null = null;
-  let cachedBundlePath: string | null = null;
-  let loadDevPagesInFlight: Promise<HtPageInfo[]> | null = null;
-
   const cleanUrls = options.cleanUrls ?? true;
 
   function logDebug(enabled: boolean | undefined, ...args: unknown[]) {
@@ -63,20 +44,14 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   }
 
   async function loadDevPages(): Promise<HtPageInfo[]> {
-    if (loadDevPagesInFlight) return loadDevPagesInFlight;
-    loadDevPagesInFlight = doLoadDevPages();
-    try {
-      return await loadDevPagesInFlight;
-    } finally {
-      loadDevPagesInFlight = null;
-    }
-  }
-
-  async function doLoadDevPages(): Promise<HtPageInfo[]> {
     const entries = await discoverEntryPages(root, options);
     const modulesByEntry = new Map<string, HtPageModule>();
 
-    logDebug(options.debug, 'discovered entries', entries.map((e) => e.relativePath));
+    logDebug(
+      options.debug,
+      'discovered entries',
+      entries.map((e) => e.relativePath),
+    );
 
     if (!server) return [];
 
@@ -107,20 +82,11 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
     const entries = await discoverEntryPages(root, options);
     const cacheDir = path.join(root, CACHE_DIR_NAME);
 
-    const entriesKey = createEntriesKey(entries);
-
-    let bundlePath: string;
-    if (cachedBundlePath && cachedManifestKey === entriesKey) {
-      bundlePath = cachedBundlePath;
-    } else {
-      bundlePath = await buildRenderBundle({
-        entries,
-        cacheDir,
-        ssrPlugins: options.ssrPlugins,
-      });
-      cachedManifestKey = entriesKey;
-      cachedBundlePath = bundlePath;
-    }
+    const bundlePath = await buildRenderBundle({
+      entries,
+      cacheDir,
+      ssrPlugins: options.ssrPlugins,
+    });
 
     logDebug(options.debug, 'render bundle', bundlePath);
 
@@ -136,16 +102,6 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       modulesByEntry,
       cleanUrls,
     });
-
-    // Ensure static hosts get a 404.html
-    const notFoundPage = pages.find((p) => p.routePath === '/404');
-
-    if (notFoundPage && !pages.some((p) => p.fileName === '404.html')) {
-      pages.push({
-        ...notFoundPage,
-        fileName: '404.html',
-      });
-    }   
 
     return { entries, bundlePath, modulesByEntry, pages };
   }
@@ -201,6 +157,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
           if (devPages.length > 0) return devPages;
           return loadDevPages();
         },
+        getEntries: async () => discoverEntryPages(root, options),
       });
 
       loadDevPages().catch((error) => {
@@ -214,44 +171,44 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
     async handleHotUpdate(ctx) {
       if (!server) return;
-    
-      const file = ctx.file;
-    
-      if (
-        file.endsWith('.ht.js') ||
-        file.includes('/templates/')
-      ) {
-        logDebug(options.debug, 'reindex triggered by', file);
-        await loadDevPages();
+
+      if (!ctx.file.endsWith('.ht.js')) {
+        return;
       }
+
+      logDebug(options.debug, 'page updated', ctx.file);
+
+      await loadDevPages();
+      return undefined;
     },
 
     async generateBundle(_, bundle) {
       const { modulesByEntry, pages } = await buildPagesPipeline();
-    
-      logDebug(options.debug, 'emitting pages', pages.map((p) => p.fileName));
-    
-      const concurrency = Math.max(1, options.renderConcurrency ?? 8);
-      const limit = pLimit(concurrency);
-      const batchSize = Math.max(
-        1,
-        options.renderBatchSize ?? Math.max(concurrency, 32),
+
+      logDebug(
+        options.debug,
+        'emitting pages',
+        pages.map((p) => p.fileName),
       );
-    
+
+      const limit = pLimit(options.renderConcurrency ?? 8);
+      const batchSize =
+        options.renderBatchSize ??
+        Math.max(options.renderConcurrency ?? 8, 32);
+
       for (const batch of chunkArray(pages, batchSize)) {
         await Promise.all(
           batch.map((page) =>
             limit(async () => {
               const mod = modulesByEntry.get(page.entryPath);
-    
               if (!mod) {
                 throw new Error(
                   `[${PLUGIN_NAME}] Missing module for page entry: ${page.entryPath}`,
                 );
               }
-    
+
               const html = await renderPage(page, mod, false);
-    
+
               this.emitFile({
                 type: 'asset',
                 fileName: options.mapOutputPath?.(page) ?? page.fileName,
@@ -261,66 +218,44 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
           ),
         );
       }
-    
-      // Generate sitemap.xml
+
       const sitemapBase = options.site ?? '';
-      const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))]
-        .filter((route) => !route.includes(':') && !route.includes('*'));
-    
+      const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(
+        (route) => !route.includes(':') && !route.includes('*'),
+      );
+
       if (sitemapRoutes.length > 0) {
-        const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
-    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-    ${sitemapRoutes
-      .map(
-        (route) =>
-          `  <url><loc>${escapeXml(sitemapBase)}${escapeXml(route)}</loc></url>`,
-      )
-      .join('\n')}
-    </urlset>
-    `;
-    
+        const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${sitemapRoutes
+          .map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`)
+          .join('\n')}\n</urlset>\n`;
+
         this.emitFile({
           type: 'asset',
           fileName: 'sitemap.xml',
           source: sitemap,
         });
       }
-    
-      // Generate rss.xml
+
       if (options.rss?.site) {
         const routePrefix = options.rss.routePrefix ?? '/blog';
-    
+
         const rssItems = pages
           .filter((page) => page.routePath.startsWith(routePrefix))
           .map((page) => {
             const url = `${options.rss!.site}${page.routePath}`;
-            return `  <item>
-        <title>${escapeXml(page.routePath)}</title>
-        <link>${escapeXml(url)}</link>
-        <guid>${escapeXml(url)}</guid>
-      </item>`;
+            return `  <item>\n    <title>${page.routePath}</title>\n    <link>${url}</link>\n    <guid>${url}</guid>\n  </item>`;
           })
           .join('\n');
-    
-        const rss = `<?xml version="1.0" encoding="UTF-8"?>
-    <rss version="2.0">
-    <channel>
-      <title>${escapeXml(options.rss.title ?? PLUGIN_NAME)}</title>
-      <link>${escapeXml(options.rss.site)}</link>
-      <description>${escapeXml(options.rss.description ?? 'RSS feed')}</description>
-    ${rssItems}
-    </channel>
-    </rss>
-    `;
-    
+
+        const rss = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n  <title>${options.rss.title ?? PLUGIN_NAME}</title>\n  <link>${options.rss.site}</link>\n  <description>${options.rss.description ?? 'RSS feed'}</description>\n${rssItems}\n</channel>\n</rss>\n`;
+
         this.emitFile({
           type: 'asset',
           fileName: 'rss.xml',
           source: rss,
         });
       }
-    
-      // Remove the dummy virtual build entry chunk
+
       for (const [fileName, output] of Object.entries(bundle)) {
         if (
           output.type === 'chunk' &&
@@ -329,7 +264,6 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
           delete bundle[fileName];
         }
       }
-    }    
-
+    },
   };
 }

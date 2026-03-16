@@ -32,6 +32,8 @@ export interface HtPageModule {
   generateStaticParams?: () =>
     | StaticParamRecord[]
     | Promise<StaticParamRecord[]>;
+  dynamic?: boolean;
+  prerender?: boolean;
 }
 
 export interface HtPagesPluginOptions {

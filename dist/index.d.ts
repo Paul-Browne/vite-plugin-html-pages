@@ -26,6 +26,8 @@ interface HtPageModule {
     default?: string | ((ctx: HtPageRenderContext) => string | Promise<string>);
     data?: (ctx: HtPageRenderContext) => unknown | Promise<unknown>;
     generateStaticParams?: () => StaticParamRecord[] | Promise<StaticParamRecord[]>;
+    dynamic?: boolean;
+    prerender?: boolean;
 }
 interface HtPagesPluginOptions {
     root?: string;

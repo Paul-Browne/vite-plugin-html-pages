@@ -1,7 +1,6 @@
 // src/plugin.ts
 import path4 from "path";
 import { pathToFileURL } from "url";
-import { createHash as createHash2 } from "crypto";
 import pLimit from "p-limit";
 
 // src/discover.ts
@@ -244,25 +243,42 @@ async function renderPage(page, mod, dev = false) {
 }
 
 // src/dev-server.ts
+function isDynamicOnly(mod) {
+  return mod.dynamic === true || mod.prerender === false;
+}
 function installDevServer(args) {
-  const { server, getPages } = args;
+  const { server, getPages, getEntries } = args;
   server.middlewares.use(async (req, res, next) => {
     try {
       if (!req.url || req.method !== "GET") return next();
       const pathname = req.url.split("?")[0];
       const pages = await getPages();
-      for (const page of pages) {
-        const params = routeMatch(page.routePattern, pathname);
-        if (!params) continue;
+      const staticPage = pages.find((p) => p.routePath === pathname);
+      if (staticPage) {
         const mod = await server.ssrLoadModule(
-          `/${page.relativePath}`
+          `/${staticPage.relativePath}`
         );
-        const resolvedPage = {
-          ...page,
-          routePath: pathname || "/",
+        const html = await renderPage(staticPage, mod, true);
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.end(html);
+        return;
+      }
+      const entries = await getEntries();
+      for (const entry of entries) {
+        const mod = await server.ssrLoadModule(
+          `/${entry.relativePath}`
+        );
+        if (!isDynamicOnly(mod)) continue;
+        const params = routeMatch(entry.routePattern, pathname);
+        if (!params) continue;
+        const page = {
+          ...entry,
+          routePath: pathname,
+          fileName: "",
           params
         };
-        const html = await renderPage(resolvedPage, mod, true);
+        const html = await renderPage(page, mod, true);
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/html; charset=utf-8");
         res.end(html);
@@ -349,10 +365,20 @@ ${records}
 }
 
 // src/render-bundle.ts
+async function createRenderBundleHash(entries, manifestSource) {
+  const hash = createHash("sha256");
+  hash.update(manifestSource);
+  for (const entry of entries) {
+    hash.update(entry.entryPath);
+    const source = await fs.readFile(entry.entryPath, "utf8");
+    hash.update(source);
+  }
+  return hash.digest("hex").slice(0, 12);
+}
 async function buildRenderBundle(args) {
   const { entries, cacheDir, ssrPlugins = [] } = args;
-  const source = createManifestModule(entries);
-  const hash = createHash("sha256").update(source).digest("hex").slice(0, 12);
+  const manifestSource = createManifestModule(entries);
+  const hash = await createRenderBundleHash(entries, manifestSource);
   const bundlePath = path3.join(cacheDir, `render-${hash}.mjs`);
   await fs.mkdir(cacheDir, { recursive: true });
   try {
@@ -369,7 +395,7 @@ async function buildRenderBundle(args) {
           return id === VIRTUAL_MANIFEST_ID ? id : null;
         },
         load(id) {
-          return id === VIRTUAL_MANIFEST_ID ? source : null;
+          return id === VIRTUAL_MANIFEST_ID ? manifestSource : null;
         }
       },
       nodeResolve({
@@ -388,7 +414,9 @@ async function buildRenderBundle(args) {
     });
     const chunk = output.find((item) => item.type === "chunk");
     if (!chunk || chunk.type !== "chunk") {
-      throw new Error(`[${PLUGIN_NAME}] Failed to generate HT.js pages render bundle.`);
+      throw new Error(
+        `[${PLUGIN_NAME}] Failed to generate HT pages render bundle.`
+      );
     }
     await fs.writeFile(bundlePath, chunk.code, "utf8");
     return bundlePath;
@@ -399,19 +427,11 @@ async function buildRenderBundle(args) {
 
 // src/plugin.ts
 function chunkArray(items, size) {
-  const safeSize = Math.max(1, Math.floor(size));
   const out = [];
-  for (let i = 0; i < items.length; i += safeSize) {
-    out.push(items.slice(i, i + safeSize));
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
   }
   return out;
-}
-function escapeXml(text) {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-}
-function createEntriesKey(entries) {
-  const raw = entries.map((e) => `${e.entryPath}|${e.routePattern}|${e.dynamic}`).join("\n");
-  return createHash2("sha256").update(raw).digest("hex");
 }
 async function importManifest(bundlePath) {
   const mod = await import(pathToFileURL(bundlePath).href + `?t=${Date.now()}`);
@@ -421,27 +441,19 @@ function htPages(options = {}) {
   let root = process.cwd();
   let server = null;
   let devPages = [];
-  let cachedManifestKey = null;
-  let cachedBundlePath = null;
-  let loadDevPagesInFlight = null;
   const cleanUrls = options.cleanUrls ?? true;
   function logDebug(enabled, ...args) {
     if (!enabled) return;
     console.log(`[${PLUGIN_NAME}]`, ...args);
   }
   async function loadDevPages() {
-    if (loadDevPagesInFlight) return loadDevPagesInFlight;
-    loadDevPagesInFlight = doLoadDevPages();
-    try {
-      return await loadDevPagesInFlight;
-    } finally {
-      loadDevPagesInFlight = null;
-    }
-  }
-  async function doLoadDevPages() {
     const entries = await discoverEntryPages(root, options);
     const modulesByEntry = /* @__PURE__ */ new Map();
-    logDebug(options.debug, "discovered entries", entries.map((e) => e.relativePath));
+    logDebug(
+      options.debug,
+      "discovered entries",
+      entries.map((e) => e.relativePath)
+    );
     if (!server) return [];
     for (const entry of entries) {
       const mod = await server.ssrLoadModule(
@@ -464,19 +476,11 @@ function htPages(options = {}) {
   async function buildPagesPipeline() {
     const entries = await discoverEntryPages(root, options);
     const cacheDir = path4.join(root, CACHE_DIR_NAME);
-    const entriesKey = createEntriesKey(entries);
-    let bundlePath;
-    if (cachedBundlePath && cachedManifestKey === entriesKey) {
-      bundlePath = cachedBundlePath;
-    } else {
-      bundlePath = await buildRenderBundle({
-        entries,
-        cacheDir,
-        ssrPlugins: options.ssrPlugins
-      });
-      cachedManifestKey = entriesKey;
-      cachedBundlePath = bundlePath;
-    }
+    const bundlePath = await buildRenderBundle({
+      entries,
+      cacheDir,
+      ssrPlugins: options.ssrPlugins
+    });
     logDebug(options.debug, "render bundle", bundlePath);
     const manifest = await importManifest(bundlePath);
     const modulesByEntry = /* @__PURE__ */ new Map();
@@ -488,13 +492,6 @@ function htPages(options = {}) {
       modulesByEntry,
       cleanUrls
     });
-    const notFoundPage = pages.find((p) => p.routePath === "/404");
-    if (notFoundPage && !pages.some((p) => p.fileName === "404.html")) {
-      pages.push({
-        ...notFoundPage,
-        fileName: "404.html"
-      });
-    }
     return { entries, bundlePath, modulesByEntry, pages };
   }
   return {
@@ -537,7 +534,8 @@ function htPages(options = {}) {
         getPages: async () => {
           if (devPages.length > 0) return devPages;
           return loadDevPages();
-        }
+        },
+        getEntries: async () => discoverEntryPages(root, options)
       });
       loadDevPages().catch((error) => {
         server?.config.logger.error(
@@ -547,21 +545,22 @@ function htPages(options = {}) {
     },
     async handleHotUpdate(ctx) {
       if (!server) return;
-      const file = ctx.file;
-      if (file.endsWith(".ht.js") || file.includes("/templates/")) {
-        logDebug(options.debug, "reindex triggered by", file);
-        await loadDevPages();
+      if (!ctx.file.endsWith(".ht.js")) {
+        return;
       }
+      logDebug(options.debug, "page updated", ctx.file);
+      await loadDevPages();
+      return void 0;
     },
     async generateBundle(_, bundle) {
       const { modulesByEntry, pages } = await buildPagesPipeline();
-      logDebug(options.debug, "emitting pages", pages.map((p) => p.fileName));
-      const concurrency = Math.max(1, options.renderConcurrency ?? 8);
-      const limit = pLimit(concurrency);
-      const batchSize = Math.max(
-        1,
-        options.renderBatchSize ?? Math.max(concurrency, 32)
+      logDebug(
+        options.debug,
+        "emitting pages",
+        pages.map((p) => p.fileName)
       );
+      const limit = pLimit(options.renderConcurrency ?? 8);
+      const batchSize = options.renderBatchSize ?? Math.max(options.renderConcurrency ?? 8, 32);
       for (const batch of chunkArray(pages, batchSize)) {
         await Promise.all(
           batch.map(
@@ -583,15 +582,15 @@ function htPages(options = {}) {
         );
       }
       const sitemapBase = options.site ?? "";
-      const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter((route) => !route.includes(":") && !route.includes("*"));
+      const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(
+        (route) => !route.includes(":") && !route.includes("*")
+      );
       if (sitemapRoutes.length > 0) {
         const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
-    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-    ${sitemapRoutes.map(
-          (route) => `  <url><loc>${escapeXml(sitemapBase)}${escapeXml(route)}</loc></url>`
-        ).join("\n")}
-    </urlset>
-    `;
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${sitemapRoutes.map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`).join("\n")}
+</urlset>
+`;
         this.emitFile({
           type: "asset",
           fileName: "sitemap.xml",
@@ -603,21 +602,21 @@ function htPages(options = {}) {
         const rssItems = pages.filter((page) => page.routePath.startsWith(routePrefix)).map((page) => {
           const url = `${options.rss.site}${page.routePath}`;
           return `  <item>
-        <title>${escapeXml(page.routePath)}</title>
-        <link>${escapeXml(url)}</link>
-        <guid>${escapeXml(url)}</guid>
-      </item>`;
+    <title>${page.routePath}</title>
+    <link>${url}</link>
+    <guid>${url}</guid>
+  </item>`;
         }).join("\n");
         const rss = `<?xml version="1.0" encoding="UTF-8"?>
-    <rss version="2.0">
-    <channel>
-      <title>${escapeXml(options.rss.title ?? PLUGIN_NAME)}</title>
-      <link>${escapeXml(options.rss.site)}</link>
-      <description>${escapeXml(options.rss.description ?? "RSS feed")}</description>
-    ${rssItems}
-    </channel>
-    </rss>
-    `;
+<rss version="2.0">
+<channel>
+  <title>${options.rss.title ?? PLUGIN_NAME}</title>
+  <link>${options.rss.site}</link>
+  <description>${options.rss.description ?? "RSS feed"}</description>
+${rssItems}
+</channel>
+</rss>
+`;
         this.emitFile({
           type: "asset",
           fileName: "rss.xml",
