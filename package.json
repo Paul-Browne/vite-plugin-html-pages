@@ -1,8 +1,9 @@
 {
   "name": "vite-plugin-htjs-pages",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "Paul Browne",
   "type": "module",
+  "license": "MIT",
   "keywords": [
     "vite",
     "vite-plugin",
