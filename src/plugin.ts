@@ -14,11 +14,21 @@ import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
 import { PLUGIN_NAME, VIRTUAL_BUILD_ENTRY_ID, CACHE_DIR_NAME } from './constants';
 
 function chunkArray<T>(items: T[], size: number): T[][] {
+  const safeSize = Math.max(1, Math.floor(size));
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
+  for (let i = 0; i < items.length; i += safeSize) {
+    out.push(items.slice(i, i + safeSize));
   }
   return out;
+}
+
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 function createEntriesKey(entries: HtPageInfo[]): string {
@@ -43,6 +53,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
   let cachedManifestKey: string | null = null;
   let cachedBundlePath: string | null = null;
+  let loadDevPagesInFlight: Promise<HtPageInfo[]> | null = null;
 
   const cleanUrls = options.cleanUrls ?? true;
 
@@ -52,6 +63,16 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   }
 
   async function loadDevPages(): Promise<HtPageInfo[]> {
+    if (loadDevPagesInFlight) return loadDevPagesInFlight;
+    loadDevPagesInFlight = doLoadDevPages();
+    try {
+      return await loadDevPagesInFlight;
+    } finally {
+      loadDevPagesInFlight = null;
+    }
+  }
+
+  async function doLoadDevPages(): Promise<HtPageInfo[]> {
     const entries = await discoverEntryPages(root, options);
     const modulesByEntry = new Map<string, HtPageModule>();
 
@@ -210,10 +231,12 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
     
       logDebug(options.debug, 'emitting pages', pages.map((p) => p.fileName));
     
-      const limit = pLimit(options.renderConcurrency ?? 8);
-      const batchSize =
-        options.renderBatchSize ??
-        Math.max(options.renderConcurrency ?? 8, 32);
+      const concurrency = Math.max(1, options.renderConcurrency ?? 8);
+      const limit = pLimit(concurrency);
+      const batchSize = Math.max(
+        1,
+        options.renderBatchSize ?? Math.max(concurrency, 32),
+      );
     
       for (const batch of chunkArray(pages, batchSize)) {
         await Promise.all(
@@ -248,7 +271,10 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
         const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
     <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     ${sitemapRoutes
-      .map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`)
+      .map(
+        (route) =>
+          `  <url><loc>${escapeXml(sitemapBase)}${escapeXml(route)}</loc></url>`,
+      )
       .join('\n')}
     </urlset>
     `;
@@ -269,9 +295,9 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
           .map((page) => {
             const url = `${options.rss!.site}${page.routePath}`;
             return `  <item>
-        <title>${page.routePath}</title>
-        <link>${url}</link>
-        <guid>${url}</guid>
+        <title>${escapeXml(page.routePath)}</title>
+        <link>${escapeXml(url)}</link>
+        <guid>${escapeXml(url)}</guid>
       </item>`;
           })
           .join('\n');
@@ -279,9 +305,9 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
         const rss = `<?xml version="1.0" encoding="UTF-8"?>
     <rss version="2.0">
     <channel>
-      <title>${options.rss.title ?? PLUGIN_NAME}</title>
-      <link>${options.rss.site}</link>
-      <description>${options.rss.description ?? 'RSS feed'}</description>
+      <title>${escapeXml(options.rss.title ?? PLUGIN_NAME)}</title>
+      <link>${escapeXml(options.rss.site)}</link>
+      <description>${escapeXml(options.rss.description ?? 'RSS feed')}</description>
     ${rssItems}
     </channel>
     </rss>

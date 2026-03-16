@@ -27,6 +27,13 @@ function normalizeFsPath(p) {
 }
 
 // src/route-utils.ts
+function safeDecodeURIComponent(str) {
+  try {
+    return decodeURIComponent(str);
+  } catch {
+    return str;
+  }
+}
 var DYNAMIC_SEGMENT_RE = /\[([A-Za-z0-9_]+)\]/g;
 var CATCH_ALL_SEGMENT_RE = /\[\.\.\.([A-Za-z0-9_]+)\]/g;
 var OPTIONAL_CATCH_ALL_SEGMENT_RE = /\[\.\.\.([A-Za-z0-9_]+)\]\?/g;
@@ -93,18 +100,18 @@ function routeMatch(pattern, urlPath) {
     const patternSeg = a[i];
     const urlSeg = b[i];
     if (patternSeg.startsWith("*?:")) {
-      params[patternSeg.slice(3)] = i < b.length ? b.slice(i).map(decodeURIComponent).join("/") : "";
+      params[patternSeg.slice(3)] = i < b.length ? b.slice(i).map(safeDecodeURIComponent).join("/") : "";
       return params;
     }
     if (patternSeg.startsWith("*:")) {
       const rest = b.slice(i);
       if (rest.length === 0) return null;
-      params[patternSeg.slice(2)] = rest.map(decodeURIComponent).join("/");
+      params[patternSeg.slice(2)] = rest.map(safeDecodeURIComponent).join("/");
       return params;
     }
     if (!urlSeg) return null;
     if (patternSeg.startsWith(":")) {
-      params[patternSeg.slice(1)] = decodeURIComponent(urlSeg);
+      params[patternSeg.slice(1)] = safeDecodeURIComponent(urlSeg);
       continue;
     }
     if (patternSeg !== urlSeg) return null;
@@ -147,7 +154,11 @@ var CACHE_DIR_NAME = `node_modules/.cache/${PLUGIN_NAME}`;
 
 // src/discover.ts
 async function discoverEntryPages(root, options) {
-  const include = Array.isArray(options.include) ? options.include : [options.include ?? "src/**/*.ht.js"];
+  const rawInclude = Array.isArray(options.include) ? options.include : [options.include ?? "src/**/*.ht.js"];
+  let include = rawInclude.filter((p) => typeof p === "string" && p.length > 0);
+  if (include.length === 0) {
+    include = ["src/**/*.ht.js"];
+  }
   const exclude = Array.isArray(options.exclude) ? options.exclude : options.exclude ? [options.exclude] : [];
   const pagesDir = options.pagesDir ?? "src";
   const pagesRoot = normalizeFsPath(path2.join(root, pagesDir));
@@ -271,7 +282,7 @@ async function buildPageIndex(args) {
   for (const entry of entries) {
     const mod = modulesByEntry.get(entry.entryPath) ?? {};
     if (entry.dynamic) {
-      const rows = mod.generateStaticParams ? await mod.generateStaticParams() : [];
+      const rows = (mod.generateStaticParams ? await mod.generateStaticParams() : []) ?? [];
       pages.push(
         ...expandStaticPaths(
           {
@@ -283,7 +294,7 @@ async function buildPageIndex(args) {
             dynamic: entry.dynamic,
             paramNames: entry.paramNames
           },
-          rows,
+          Array.isArray(rows) ? rows : [],
           cleanUrls
         )
       );
@@ -388,11 +399,15 @@ async function buildRenderBundle(args) {
 
 // src/plugin.ts
 function chunkArray(items, size) {
+  const safeSize = Math.max(1, Math.floor(size));
   const out = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
+  for (let i = 0; i < items.length; i += safeSize) {
+    out.push(items.slice(i, i + safeSize));
   }
   return out;
+}
+function escapeXml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 function createEntriesKey(entries) {
   const raw = entries.map((e) => `${e.entryPath}|${e.routePattern}|${e.dynamic}`).join("\n");
@@ -408,12 +423,22 @@ function htPages(options = {}) {
   let devPages = [];
   let cachedManifestKey = null;
   let cachedBundlePath = null;
+  let loadDevPagesInFlight = null;
   const cleanUrls = options.cleanUrls ?? true;
   function logDebug(enabled, ...args) {
     if (!enabled) return;
     console.log(`[${PLUGIN_NAME}]`, ...args);
   }
   async function loadDevPages() {
+    if (loadDevPagesInFlight) return loadDevPagesInFlight;
+    loadDevPagesInFlight = doLoadDevPages();
+    try {
+      return await loadDevPagesInFlight;
+    } finally {
+      loadDevPagesInFlight = null;
+    }
+  }
+  async function doLoadDevPages() {
     const entries = await discoverEntryPages(root, options);
     const modulesByEntry = /* @__PURE__ */ new Map();
     logDebug(options.debug, "discovered entries", entries.map((e) => e.relativePath));
@@ -531,8 +556,12 @@ function htPages(options = {}) {
     async generateBundle(_, bundle) {
       const { modulesByEntry, pages } = await buildPagesPipeline();
       logDebug(options.debug, "emitting pages", pages.map((p) => p.fileName));
-      const limit = pLimit(options.renderConcurrency ?? 8);
-      const batchSize = options.renderBatchSize ?? Math.max(options.renderConcurrency ?? 8, 32);
+      const concurrency = Math.max(1, options.renderConcurrency ?? 8);
+      const limit = pLimit(concurrency);
+      const batchSize = Math.max(
+        1,
+        options.renderBatchSize ?? Math.max(concurrency, 32)
+      );
       for (const batch of chunkArray(pages, batchSize)) {
         await Promise.all(
           batch.map(
@@ -558,7 +587,9 @@ function htPages(options = {}) {
       if (sitemapRoutes.length > 0) {
         const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
     <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-    ${sitemapRoutes.map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`).join("\n")}
+    ${sitemapRoutes.map(
+          (route) => `  <url><loc>${escapeXml(sitemapBase)}${escapeXml(route)}</loc></url>`
+        ).join("\n")}
     </urlset>
     `;
         this.emitFile({
@@ -572,17 +603,17 @@ function htPages(options = {}) {
         const rssItems = pages.filter((page) => page.routePath.startsWith(routePrefix)).map((page) => {
           const url = `${options.rss.site}${page.routePath}`;
           return `  <item>
-        <title>${page.routePath}</title>
-        <link>${url}</link>
-        <guid>${url}</guid>
+        <title>${escapeXml(page.routePath)}</title>
+        <link>${escapeXml(url)}</link>
+        <guid>${escapeXml(url)}</guid>
       </item>`;
         }).join("\n");
         const rss = `<?xml version="1.0" encoding="UTF-8"?>
     <rss version="2.0">
     <channel>
-      <title>${options.rss.title ?? PLUGIN_NAME}</title>
-      <link>${options.rss.site}</link>
-      <description>${options.rss.description ?? "RSS feed"}</description>
+      <title>${escapeXml(options.rss.title ?? PLUGIN_NAME)}</title>
+      <link>${escapeXml(options.rss.site)}</link>
+      <description>${escapeXml(options.rss.description ?? "RSS feed")}</description>
     ${rssItems}
     </channel>
     </rss>

@@ -9,9 +9,13 @@ export async function discoverEntryPages(
   root: string,
   options: HtPagesPluginOptions,
 ): Promise<HtPageInfo[]> {
-  const include = Array.isArray(options.include)
+  const rawInclude = Array.isArray(options.include)
     ? options.include
     : [options.include ?? 'src/**/*.ht.js'];
+  let include = rawInclude.filter((p): p is string => typeof p === 'string' && p.length > 0);
+  if (include.length === 0) {
+    include = ['src/**/*.ht.js'];
+  }
 
   const exclude = Array.isArray(options.exclude)
     ? options.exclude

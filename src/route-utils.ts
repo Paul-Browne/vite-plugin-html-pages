@@ -1,6 +1,14 @@
 import { normalizeRoutePath, stripHtSuffix, toPosix } from './path-utils';
 import type { HtPageInfo, StaticParamRecord } from './types';
 
+function safeDecodeURIComponent(str: string): string {
+  try {
+    return decodeURIComponent(str);
+  } catch {
+    return str;
+  }
+}
+
 const DYNAMIC_SEGMENT_RE = /\[([A-Za-z0-9_]+)\]/g;
 const CATCH_ALL_SEGMENT_RE = /\[\.\.\.([A-Za-z0-9_]+)\]/g;
 const OPTIONAL_CATCH_ALL_SEGMENT_RE = /\[\.\.\.([A-Za-z0-9_]+)\]\?/g;
@@ -113,7 +121,7 @@ export function routeMatch(
 
     if (patternSeg.startsWith('*?:')) {
       params[patternSeg.slice(3)] =
-        i < b.length ? b.slice(i).map(decodeURIComponent).join('/') : '';
+        i < b.length ? b.slice(i).map(safeDecodeURIComponent).join('/') : '';
       return params;
     }
 
@@ -121,14 +129,14 @@ export function routeMatch(
       const rest = b.slice(i);
       if (rest.length === 0) return null;
 
-      params[patternSeg.slice(2)] = rest.map(decodeURIComponent).join('/');
+      params[patternSeg.slice(2)] = rest.map(safeDecodeURIComponent).join('/');
       return params;
     }
 
     if (!urlSeg) return null;
 
     if (patternSeg.startsWith(':')) {
-      params[patternSeg.slice(1)] = decodeURIComponent(urlSeg);
+      params[patternSeg.slice(1)] = safeDecodeURIComponent(urlSeg);
       continue;
     }
 

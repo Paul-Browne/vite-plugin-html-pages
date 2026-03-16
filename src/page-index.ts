@@ -17,9 +17,10 @@ export async function buildPageIndex(args: {
     const mod = modulesByEntry.get(entry.entryPath) ?? {};
 
     if (entry.dynamic) {
-      const rows = mod.generateStaticParams
-        ? await mod.generateStaticParams()
-        : [];
+      const rows =
+        (mod.generateStaticParams
+          ? await mod.generateStaticParams()
+          : []) ?? [];
 
       pages.push(
         ...expandStaticPaths(
@@ -32,7 +33,7 @@ export async function buildPageIndex(args: {
             dynamic: entry.dynamic,
             paramNames: entry.paramNames,
           } as Omit<HtPageInfo, 'routePath' | 'fileName' | 'params'>,
-          rows as StaticParamRecord[],
+          Array.isArray(rows) ? rows : [],
           cleanUrls,
         ),
       );
