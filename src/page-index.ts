@@ -1,6 +1,10 @@
-import { compareRoutePriority, expandStaticPaths, fileNameFromRoute } from './route-utils';
+import {
+  compareRoutePriority,
+  expandStaticPaths,
+  fileNameFromRoute,
+} from './route-utils';
 import type { HtPageInfo, HtPageModule, StaticParamRecord } from './types';
-
+import { PLUGIN_NAME } from './constants';
 export async function buildPageIndex(args: {
   entries: HtPageInfo[];
   modulesByEntry: Map<string, HtPageModule>;
@@ -13,7 +17,10 @@ export async function buildPageIndex(args: {
     const mod = modulesByEntry.get(entry.entryPath) ?? {};
 
     if (entry.dynamic) {
-      const rows = mod.generateStaticParams ? await mod.generateStaticParams() : [];
+      const rows = mod.generateStaticParams
+        ? await mod.generateStaticParams()
+        : [];
+
       pages.push(
         ...expandStaticPaths(
           {
@@ -40,5 +47,20 @@ export async function buildPageIndex(args: {
   }
 
   pages.sort((a, b) => compareRoutePriority(a.routePattern, b.routePattern));
+
+  const seenRoutes = new Map<string, HtPageInfo>();
+
+  for (const page of pages) {
+    const existing = seenRoutes.get(page.routePath);
+
+    if (existing) {
+      throw new Error(
+        `[${PLUGIN_NAME}] Duplicate route generated: "${page.routePath}" from "${existing.relativePath}" and "${page.relativePath}"`,
+      );
+    }
+
+    seenRoutes.set(page.routePath, page);
+  }
+
   return pages;
 }

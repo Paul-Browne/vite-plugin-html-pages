@@ -6,14 +6,13 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   clean: true,
-  // external: [
-  //   'vite',
-  //   'rollup',
-  //   'fast-glob',
-  //   'p-limit',
-  //   'node:path',
-  //   'node:url',
-  //   'node:fs/promises',
-  //   'node:crypto',
-  // ],
+  target: 'node18',
+  splitting: false,
+  external: [
+    'vite',
+    'rollup',
+    'fast-glob',
+    'p-limit',
+    '@rollup/plugin-node-resolve'
+  ],
 });

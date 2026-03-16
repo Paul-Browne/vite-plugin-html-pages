@@ -1,5 +1,5 @@
-import { Plugin } from 'vite';
-import * as rollup from 'rollup';
+import { Plugin as Plugin$1 } from 'vite';
+import { Plugin } from 'rollup';
 
 interface StaticParamRecord {
     [key: string]: string | number | boolean;
@@ -20,7 +20,7 @@ interface HtPageRenderContext {
     page: HtPageInfo;
     params: Record<string, string>;
     data?: unknown;
-    dev?: boolean;
+    dev: boolean;
 }
 interface HtPageModule {
     default?: string | ((ctx: HtPageRenderContext) => string | Promise<string>);
@@ -35,10 +35,10 @@ interface HtPagesPluginOptions {
     renderConcurrency?: number;
     renderBatchSize?: number;
     cleanUrls?: boolean;
-    ssrPlugins?: rollup.Plugin[];
+    ssrPlugins?: Plugin[];
     mapOutputPath?: (page: HtPageInfo) => string;
 }
 
-declare function htPages(options?: HtPagesPluginOptions): Plugin;
+declare function htPages(options?: HtPagesPluginOptions): Plugin$1;
 
 export { type HtPageInfo, type HtPageModule, type HtPageRenderContext, type HtPagesPluginOptions, type StaticParamRecord, htPages };

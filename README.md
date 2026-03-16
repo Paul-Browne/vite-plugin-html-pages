@@ -1,39 +1,100 @@
 # vite-plugin-htjs-pages
 
-A lightweight Vite plugin for generating static HTML from `*.ht.js` page modules.
+[![npm version](https://img.shields.io/npm/v/vite-plugin-htjs-pages.svg)](https://www.npmjs.com/package/vite-plugin-htjs-pages)
+[![npm downloads](https://img.shields.io/npm/dm/vite-plugin-htjs-pages.svg)](https://www.npmjs.com/package/vite-plugin-htjs-pages)
+[![license](https://img.shields.io/npm/l/vite-plugin-htjs-pages.svg)](LICENSE)
+[![vite](https://img.shields.io/badge/vite-plugin-646CFF?logo=vite&logoColor=white)](https://vitejs.dev)
 
-Pages are written as JavaScript that returns HTML. The plugin turns them into static HTML files during build.
+Minimal **static site generation (SSG) for Vite** using JavaScript functions that return HTML.
 
-This makes it ideal for **blogs, documentation sites, and marketing pages** where you want full control over HTML but still want a modern build pipeline.
+Generate static HTML pages from `*.ht.js` modules using Vite and [`javascript-to-html`](https://www.npmjs.com/package/javascript-to-html).
+
+⭐ If this project helps you, please consider starring it.
+
+## Built for the Vite ecosystem
+
+Works seamlessly with:
+
+- ⚡ **Vite**
+- 📦 **Rollup / Rolldown**
+- 🧩 **javascript-to-html**
+
+A minimal **static site generator for Vite** that keeps pages as simple JavaScript functions returning HTML.
 
 ---
 
-# Features
+## Features
 
-- File‑based routing
+- File-based routing
 - Dynamic routes (`[slug].ht.js`)
-- Catch‑all routes (`[...slug].ht.js`)
-- Static params generation (`generateStaticParams()`)
+- Catch-all routes (`[...slug].ht.js`)
+- Static params generation
 - Dev server SSR rendering
 - Clean URL support
-- Parallel + batched page rendering
-- Compatible with HT.js style HTML generation
+- Parallel batched page rendering
+- Works naturally with `javascript-to-html`
 
 ---
 
-# Installation
+## Why this exists
+
+Modern static site tools are powerful, but they often introduce:
+
+- frameworks
+- component systems
+- complex build pipelines
+- opinionated conventions
+
+Sometimes you just want to:
+
+- write HTML
+- organize pages in folders
+- generate static files
+
+`vite-plugin-htjs-pages` exists for that use case.
+
+It gives you:
+
+- file-based routing
+- dynamic pages
+- static generation
+- dev server rendering
+
+while keeping pages as **simple JavaScript functions that return HTML**.
+
+---
+
+## How it works
+
+```
+src/index.ht.js
+src/blog/[slug].ht.js
+        │
+        ▼
+ vite-plugin-htjs-pages
+        │
+        ▼
+dist/index.html
+dist/blog/hello-world/index.html
+```
+
+Pages are just **JavaScript functions that return HTML**.
+
+---
+
+## Installation
 
 ```bash
-npm install vite-plugin-htjs-pages --save-dev
+npm install vite-plugin-htjs-pages javascript-to-html
 ```
 
 ---
 
-# Quick Start
+## Quick Start
 
 ### 1. Configure Vite
 
-```ts
+```js
 import { defineConfig } from 'vite'
 import { htPages } from 'vite-plugin-htjs-pages'
 
@@ -42,8 +103,6 @@ export default defineConfig({
 })
 ```
 
----
-
 ### 2. Create a page
 
 ```
@@ -51,13 +110,13 @@ src/index.ht.js
 ```
 
 ```js
-import { fragment, html, head, title, body, h1 } from 'javascript-to-html'
+import { fragment, html, head, body, title, h1 } from 'javascript-to-html'
 
 export default () => fragment(
   '<!doctype html>',
   html(
     head(
-      title('hello world')
+      title('Hello')
     ),
     body(
       h1('Hello world')
@@ -65,8 +124,6 @@ export default () => fragment(
   )
 )
 ```
-
----
 
 ### 3. Run dev server
 
@@ -77,12 +134,10 @@ vite
 Open:
 
 ```
-http://localhost:5173/
+http://localhost:5173
 ```
 
----
-
-### 4. Build static HTML
+### 4. Build
 
 ```bash
 vite build
@@ -96,103 +151,35 @@ dist/index.html
 
 ---
 
-# Project Structure Example
+## File-Based Routing
+
+Routes are derived from the filesystem.
 
 ```
 src/
 
   index.ht.js
+  about.ht.js
 
   blog/
     [slug].ht.js
 
   docs/
     [...slug].ht.js
-
-  templates/
-    layout.js
 ```
 
-Build output:
+Produces:
 
 ```
-dist/
-
-  index.html
-
-  blog/
-    hello-world/index.html
-
-  docs/
-    getting-started/index.html
+/index.html
+/about/index.html
+/blog/hello-world/index.html
+/docs/getting-started/index.html
 ```
 
 ---
 
-# Page Modules
-
-Pages export a function returning HTML using `javascript-to-html` helpers.
-
-```js
-import { fragment, html, body, h1 } from 'javascript-to-html'
-
-export default () => fragment(
-  '<!doctype html>',
-  html(
-    body(
-      h1('Hello')
-    )
-  )
-)
-```
-
-Async rendering works too:
-
-```js
-import { fragment, html, body, h1 } from 'javascript-to-html'
-
-export default async () => {
-  const post = await loadPost()
-
-  return fragment(
-    '<!doctype html>',
-    html(
-      body(
-        h1(post.title)
-      )
-    )
-  )
-}
-```
-
----
-
-# Data Loading
-
-Pages can export a `data()` function.
-
-```js
-import { fragment, html, body, h1 } from 'javascript-to-html'
-
-export async function data({ params }) {
-  return {
-    title: params.slug
-  }
-}
-
-export default ({ data }) => fragment(
-  '<!doctype html>',
-  html(
-    body(
-      h1(data.title)
-    )
-  )
-)
-```
-
----
-
-# Dynamic Routes
+## Dynamic Routes
 
 ```
 src/blog/[slug].ht.js
@@ -218,16 +205,9 @@ export default ({ params }) => fragment(
 )
 ```
 
-Output:
-
-```
-/blog/hello-world/index.html
-/blog/deep-dive/index.html
-```
-
 ---
 
-# Catch‑All Routes
+## Catch-All Routes
 
 ```
 src/docs/[...slug].ht.js
@@ -247,68 +227,7 @@ export default ({ params }) => fragment(
   '<!doctype html>',
   html(
     body(
-      h1(`Docs: ${params.slug}`)
-    )
-  )
-)
-```
-
-Output:
-
-```
-/docs/getting-started/index.html
-/docs/api/auth/login/index.html
-```
-
----
-
-# Routing Rules
-
-Routes are automatically sorted so specific routes win.
-
-| Type | Example | Priority |
-|-----|------|------|
-| Static | `/blog/new` | Highest |
-| Dynamic | `/blog/:slug` | Medium |
-| Catch‑all | `/docs/*:slug` | Lowest |
-
-This prevents dynamic routes from accidentally overriding static pages.
-
----
-
-# Plugin Options
-
-```ts
-htPages({
-  cleanUrls: true,
-  renderConcurrency: 8,
-  renderBatchSize: 64
-})
-```
-
-| Option | Description |
-|------|------|
-| `cleanUrls` | `/page/index.html` instead of `/page.html` |
-| `renderConcurrency` | concurrent page renders |
-| `renderBatchSize` | render batch size |
-| `include` | page file glob |
-| `exclude` | excluded globs |
-| `pagesDir` | route root directory |
-| `mapOutputPath` | customize output path |
-
----
-
-# HT.js Example
-
-```js
-import { fragment, html, body, h1, p } from 'javascript-to-html'
-
-export default () => fragment(
-  '<!doctype html>',
-  html(
-    body(
-      h1('Hello'),
-      p('Welcome to my site')
+      h1(params.slug)
     )
   )
 )
@@ -316,35 +235,24 @@ export default () => fragment(
 
 ---
 
-# Example Blog Page
+## Data Loading
 
-```
-src/blog/[slug].ht.js
-```
+Pages may export a `data()` function.
 
 ```js
-import { fragment, html, body, article, h1, p } from 'javascript-to-html'
-
-export function generateStaticParams() {
-  return [
-    { slug: 'my-first-post' },
-    { slug: 'another-post' }
-  ]
-}
+import { fragment, html, body, h1 } from 'javascript-to-html'
 
 export async function data({ params }) {
-  const post = await loadPost(params.slug)
-  return { post }
+  return {
+    title: params.slug
+  }
 }
 
 export default ({ data }) => fragment(
   '<!doctype html>',
   html(
     body(
-      article(
-        h1(data.post.title),
-        p(data.post.content)
-      )
+      h1(data.title)
     )
   )
 )
@@ -352,45 +260,9 @@ export default ({ data }) => fragment(
 
 ---
 
-# Best Practices
+## Layouts
 
-### Keep layouts reusable
-
-```
-src/templates/layout.js
-```
-
-Pages import layouts instead of duplicating HTML.
-
----
-
-### Keep data loading separate
-
-Prefer this:
-
-```js
-export async function data() {}
-```
-
-Instead of heavy logic in the render function.
-
----
-
-### Prefer deterministic builds
-
-Dynamic pages should use `generateStaticParams()` so builds are predictable.
-
----
-
-# Layouts
-
-A common HT.js pattern is creating reusable layout templates.
-
-```
-src/templates/layout.js
-```
-
-Example layout:
+Layouts are reusable functions.
 
 ```js
 import { fragment, html, head, body } from 'javascript-to-html'
@@ -406,30 +278,22 @@ export default (...content) => fragment(
 )
 ```
 
-Then use the layout in a page:
+Use in pages:
 
 ```js
-import { h1 } from 'javascript-to-html'
 import layout from '../templates/layout.js'
+import { h1 } from 'javascript-to-html'
 
 export default () => layout(
   h1('Home page')
 )
 ```
 
-This keeps page files small while sharing global structure.
-
 ---
 
-# Reusable Components
+## Components
 
-HT.js works well with small reusable components.
-
-Example component:
-
-```
-src/components/nav.js
-```
+Components are simple functions.
 
 ```js
 import { nav, a } from 'javascript-to-html'
@@ -440,49 +304,78 @@ export default () => nav(
 )
 ```
 
-Use inside pages or layouts:
+---
 
-```js
-import { fragment, html, body, main, h1 } from 'javascript-to-html'
-import nav from '../components/nav.js'
+## Routing Priority
 
-export default () => fragment(
-  '<!doctype html>',
-  html(
-    body(
-      nav(),
-      main(
-        h1('Welcome')
-      )
-    )
-  )
-)
-```
+Routes are sorted automatically.
 
-Breaking UI into small components keeps templates maintainable and mirrors the approach used by component frameworks while remaining pure HTML generation.
+| Type | Example | Priority |
+|-----|------|------|
+| Static | `/blog/new` | Highest |
+| Dynamic | `/blog/:slug` | Medium |
+| Catch-all | `/docs/*:slug` | Lowest |
+
+This prevents dynamic routes from overriding static pages.
 
 ---
 
-# Performance Tips
+## Plugin Options
 
-Large sites (500+ pages) should increase batching:
+```js
+htPages({
+  cleanUrls: true,
+  renderConcurrency: 8,
+  renderBatchSize: 64
+})
+```
 
-```ts
+| Option | Description |
+|------|------|
+| `pagesDir` | root directory for pages |
+| `include` | page glob pattern |
+| `exclude` | excluded patterns |
+| `cleanUrls` | `/page/index.html` instead of `/page.html` |
+| `renderConcurrency` | concurrent page renders |
+| `renderBatchSize` | render batch size |
+| `mapOutputPath` | customize output path |
+
+---
+
+## Performance Tips
+
+Large sites (500+ pages):
+
+```js
 htPages({
   renderConcurrency: 16,
   renderBatchSize: 128
 })
 ```
 
-This keeps memory usage stable during builds.
+Keeps builds stable and memory usage predictable.
 
 ---
 
-# Comparison
+## Use Cases
+
+`vite-plugin-htjs-pages` works well for:
+
+- **Vite static site generation**
+- **File-based routing with Vite**
+- **Generating static HTML with Vite**
+- **Vite blog generators**
+- **Documentation sites with Vite**
+- **Minimal static site generators**
+- **HTML-first Vite projects**
+
+---
+
+## Comparison
 
 | Tool | Focus |
-|----|----|
-| Astro | full framework |
+|-----|-----|
+| Astro | component framework |
 | Next.js | SSR framework |
 | vite-plugin-htjs-pages | minimal static HTML generation |
 
@@ -490,140 +383,37 @@ This plugin intentionally stays **small and unopinionated**.
 
 ---
 
-# FAQ
+## FAQ
 
-### Can I use React/Vue inside pages?
+### Can I use React/Vue?
 
-Technically yes, but this plugin is intended for **HTML generation**, not SPA rendering.
+Technically yes, but the plugin is intended for **HTML generation**, not SPA rendering.
 
-### Can I add layouts?
+### Does it scale to large sites?
 
-Yes — just import shared functions.
+Yes. Rendering is batched and parallelized.
 
-```
-import layout from '../templates/layout.js'
-```
+### How do I share layouts?
 
-### Does it support thousands of pages?
-
-Yes. Batched rendering keeps builds stable even for very large sites.
+Just export functions and import them.
 
 ---
 
-# License
+## Philosophy
 
-```
+The plugin intentionally avoids framework features like:
+
+- DOM patching HMR
+- layout systems
+- route groups
+- complex data loaders
+
+The goal is a **small predictable core**.
+
+Pages are simply **functions that return HTML**.
+
+---
+
+## License
+
 MIT
-```
-
----
-
-## Example dynamic page
-
-```js
-// src/blog/[slug].ht.js
-import { fragment, html, head, title, body, main, h1 } from 'javascript-to-html'
-
-export function generateStaticParams() {
-  return [
-    { slug: 'hello-world' },
-    { slug: 'deep-dive' },
-  ];
-}
-
-export async function data({ params }) {
-  return {
-    title: params.slug,
-  };
-}
-
-export default ({ data }) => fragment(
-  '<!doctype html>',
-  html(
-    head(
-      title(data.title)
-    ),
-    body(
-      main(
-        h1(data.title)
-      )
-    )
-  )
-);
-```
-
----
-
-## Example catch-all page
-
-```js
-// src/docs/[...slug].ht.js
-import { fragment, html, head, title, body, main, h1 } from 'javascript-to-html'
-
-export function generateStaticParams() {
-  return [
-    { slug: 'getting-started' },
-    { slug: 'api/auth/login' },
-    { slug: 'guides/rendering/static' },
-  ];
-}
-
-export default ({ params }) => fragment(
-  '<!doctype html>',
-  html(
-    head(
-      title(params.slug)
-    ),
-    body(
-      main(
-        h1(params.slug)
-      )
-    )
-  )
-);
-```
-
----
-
-## Notes
-
-### Route precedence
-
-Given both:
-
-- `src/blog/new.ht.js`
-- `src/blog/[slug].ht.js`
-
-`/blog/new` will match the static page first.
-
-### Catch-all routes
-
-`src/docs/[...slug].ht.js` matches nested paths and expects `generateStaticParams()` to provide values like:
-
-- `{ slug: 'getting-started' }`
-- `{ slug: 'api/auth/login' }`
-
-### Batched rendering
-
-Large builds are processed in chunks for lower peak memory and more stable execution.
-
----
-
-## What this version does well
-
-- very small mental model
-- static routes beat dynamic routes
-- catch-all routes are supported
-- no Node per-page dynamic-import loop in build mode
-- static params are first-class
-- dev mode stays simple by letting Vite SSR-load the page module directly
-- build mode is calmer for large page counts
-
-## What it intentionally does not do
-
-- no custom DOM patch HMR
-- no incremental dependency invalidation
-- no smart route groups or layout system
-- no optional catch-all routes yet
-
-That tradeoff is deliberate: this is a strong small-core version to prototype or publish from.

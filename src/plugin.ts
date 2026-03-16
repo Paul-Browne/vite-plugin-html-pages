@@ -2,15 +2,14 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import pLimit from 'p-limit';
-import type { Plugin, ResolvedConfig, ViteDevServer } from 'vite';
+import type { Plugin, ViteDevServer } from 'vite';
 import { discoverEntryPages } from './discover';
 import { installDevServer } from './dev-server';
 import { buildPageIndex } from './page-index';
 import { buildRenderBundle } from './render-bundle';
 import { renderPage } from './render-runtime';
 import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
-
-const VIRTUAL_BUILD_ENTRY_ID = '\0vite-plugin-htjs-pages:build-entry';
+import { PLUGIN_NAME, VIRTUAL_BUILD_ENTRY_ID, CACHE_DIR_NAME } from './constants';
 
 function chunkArray<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -28,7 +27,9 @@ function createEntriesKey(entries: HtPageInfo[]): string {
   return createHash('sha256').update(raw).digest('hex');
 }
 
-async function importManifest(bundlePath: string): Promise<Array<{ page: HtPageInfo; mod: HtPageModule }>> {
+async function importManifest(
+  bundlePath: string,
+): Promise<Array<{ page: HtPageInfo; mod: HtPageModule }>> {
   const mod = await import(pathToFileURL(bundlePath).href + `?t=${Date.now()}`);
   return mod.manifest as Array<{ page: HtPageInfo; mod: HtPageModule }>;
 }
@@ -37,6 +38,10 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   let root = process.cwd();
   let server: ViteDevServer | null = null;
   let devPages: HtPageInfo[] = [];
+
+  let cachedManifestKey: string | null = null;
+  let cachedBundlePath: string | null = null;
+
   const cleanUrls = options.cleanUrls ?? true;
 
   async function loadDevPages(): Promise<HtPageInfo[]> {
@@ -46,7 +51,10 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
     if (!server) return [];
 
     for (const entry of entries) {
-      const mod = (await server.ssrLoadModule(entry.entryPath)) as HtPageModule;
+      const mod = (await server.ssrLoadModule(
+        `/${entry.relativePath}`,
+      )) as HtPageModule;
+
       modulesByEntry.set(entry.entryPath, mod);
     }
 
@@ -60,12 +68,12 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   }
 
   return {
-    name: 'vite-plugin-htjs-pages',
+    name: PLUGIN_NAME,
 
-    config(userConfig) {
-      const hasExplicitInput =
-        userConfig.build?.rollupOptions?.input != null;
+    config(userConfig, env) {
+      if (env.command !== 'build') return;
 
+      const hasExplicitInput = userConfig.build?.rollupOptions?.input != null;
       if (hasExplicitInput) return;
 
       return {
@@ -95,6 +103,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
     async buildStart() {
       const entries = await discoverEntryPages(root, options);
+
       for (const entry of entries) {
         this.addWatchFile(entry.entryPath);
       }
@@ -105,16 +114,19 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
       installDevServer({
         server,
-        getPages: () => devPages,
+        getPages: async () => {
+          if (devPages.length > 0) return devPages;
+          return loadDevPages();
+        },
       });
 
       loadDevPages().catch((error) => {
-        server?.config.logger.error(String(error));
+        server?.config.logger.error(
+          `[${PLUGIN_NAME}] loadDevPages failed: ${
+            error instanceof Error ? error.stack ?? error.message : String(error)
+          }`,
+        );
       });
-
-      return () => {
-        server = null;
-      };
     },
 
     async handleHotUpdate() {
@@ -124,17 +136,31 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       return undefined;
     },
 
-    async generateBundle() {
+    async generateBundle(_, bundle) {
       const entries = await discoverEntryPages(root, options);
-      const cacheDir = path.join(root, 'node_modules/.cache/vite-plugin-htjs-pages');
-      const bundlePath = await buildRenderBundle({
-        entries,
-        cacheDir,
-        ssrPlugins: options.ssrPlugins,
-      });
+      const cacheDir = path.join(
+        root,
+        CACHE_DIR_NAME,
+      );
+
+      const entriesKey = createEntriesKey(entries);
+
+      let bundlePath: string;
+      if (cachedBundlePath && cachedManifestKey === entriesKey) {
+        bundlePath = cachedBundlePath;
+      } else {
+        bundlePath = await buildRenderBundle({
+          entries,
+          cacheDir,
+          ssrPlugins: options.ssrPlugins,
+        });
+        cachedManifestKey = entriesKey;
+        cachedBundlePath = bundlePath;
+      }
 
       const manifest = await importManifest(bundlePath);
       const modulesByEntry = new Map<string, HtPageModule>();
+
       for (const rec of manifest) {
         modulesByEntry.set(rec.page.entryPath, rec.mod);
       }
@@ -146,15 +172,21 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       });
 
       const limit = pLimit(options.renderConcurrency ?? 8);
-      const batchSize = options.renderBatchSize ?? Math.max(options.renderConcurrency ?? 8, 32);
+      const batchSize =
+        options.renderBatchSize ??
+        Math.max(options.renderConcurrency ?? 8, 32);
 
       for (const batch of chunkArray(pages, batchSize)) {
         await Promise.all(
           batch.map((page) =>
             limit(async () => {
               const mod = modulesByEntry.get(page.entryPath);
-              if (!mod) throw new Error(`Missing module for page entry: ${page.entryPath}`);
+              if (!mod) {
+                throw new Error(`[${PLUGIN_NAME}] Missing module for page entry: ${page.entryPath}`);
+              }
+
               const html = await renderPage(page, mod, false);
+
               this.emitFile({
                 type: 'asset',
                 fileName: options.mapOutputPath?.(page) ?? page.fileName,
@@ -163,6 +195,15 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
             }),
           ),
         );
+      }
+
+      for (const [fileName, output] of Object.entries(bundle)) {
+        if (
+          output.type === 'chunk' &&
+          output.facadeModuleId === VIRTUAL_BUILD_ENTRY_ID
+        ) {
+          delete bundle[fileName];
+        }
       }
     },
   };

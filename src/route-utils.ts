@@ -1,5 +1,6 @@
 import { normalizeRoutePath, stripHtSuffix, toPosix } from './path-utils';
 import type { HtPageInfo, StaticParamRecord } from './types';
+import { PLUGIN_NAME } from './constants';
 
 const DYNAMIC_SEGMENT_RE = /\[([A-Za-z0-9_]+)\]/g;
 const CATCH_ALL_SEGMENT_RE = /\[\.\.\.([A-Za-z0-9_]+)\]/g;
@@ -10,36 +11,52 @@ export function getParamNames(relativeFromPagesDir: string): string[] {
 }
 
 export function isDynamicPage(relativeFromPagesDir: string): boolean {
-  return ANY_PARAM_RE.test(relativeFromPagesDir);
+  return /\[(?:\.\.\.)?[A-Za-z0-9_]+\]/.test(relativeFromPagesDir);
 }
 
 export function toRoutePattern(relativeFromPagesDir: string): string {
   const noExt = stripHtSuffix(toPosix(relativeFromPagesDir));
+
   const raw = noExt
     .replace(/(^|\/)index$/i, '$1')
     .replace(CATCH_ALL_SEGMENT_RE, '*:$1')
     .replace(DYNAMIC_SEGMENT_RE, ':$1');
+
   return normalizeRoutePath(raw || '/');
 }
 
-export function fillParams(pattern: string, params: Record<string, string>): string {
+export function fillParams(
+  pattern: string,
+  params: Record<string, string>,
+): string {
   return pattern
     .replace(/\*:([A-Za-z0-9_]+)/g, (_, key) => {
-      if (!(key in params)) throw new Error(`Missing catch-all route param "${key}"`);
+      if (!(key in params)) {
+        throw new Error(`[${PLUGIN_NAME}] Missing catch-all route param "${key}"`);
+      }
+
       return String(params[key])
         .split('/')
         .map((part) => encodeURIComponent(part))
         .join('/');
     })
     .replace(/:([A-Za-z0-9_]+)/g, (_, key) => {
-      if (!(key in params)) throw new Error(`Missing route param "${key}"`);
+      if (!(key in params)) {
+        throw new Error(`[${PLUGIN_NAME}] Missing route param "${key}"`);
+      }
+
       return encodeURIComponent(params[key]);
     });
 }
 
-export function fileNameFromRoute(routePath: string, cleanUrls: boolean): string {
+export function fileNameFromRoute(
+  routePath: string,
+  cleanUrls: boolean,
+): string {
   const normalized = normalizeRoutePath(routePath);
+
   if (normalized === '/') return 'index.html';
+
   const base = normalized.slice(1);
   return cleanUrls ? `${base}/index.html` : `${base}.html`;
 }
@@ -53,7 +70,9 @@ export function expandStaticPaths(
     const params = Object.fromEntries(
       Object.entries(row).map(([k, v]) => [k, String(v)]),
     );
+
     const routePath = fillParams(basePage.routePattern, params);
+
     return {
       ...basePage,
       routePath,
@@ -63,7 +82,10 @@ export function expandStaticPaths(
   });
 }
 
-export function routeMatch(pattern: string, urlPath: string): Record<string, string> | null {
+export function routeMatch(
+  pattern: string,
+  urlPath: string,
+): Record<string, string> | null {
   const a = normalizeRoutePath(pattern).split('/').filter(Boolean);
   const b = normalizeRoutePath(urlPath).split('/').filter(Boolean);
   const params: Record<string, string> = {};
@@ -72,7 +94,13 @@ export function routeMatch(pattern: string, urlPath: string): Record<string, str
     const seg = a[i];
 
     if (seg.startsWith('*:')) {
-      params[seg.slice(2)] = b.slice(j).map(decodeURIComponent).join('/');
+      const rest = b.slice(j);
+
+      if (rest.length === 0) {
+        return null;
+      }
+
+      params[seg.slice(2)] = rest.map(decodeURIComponent).join('/');
       return params;
     }
 
@@ -98,8 +126,8 @@ export function compareRoutePriority(a: string, b: string): number {
     const aa = aSegs[i];
     const bb = bSegs[i];
 
-    if (aa == null) return -1;
-    if (bb == null) return 1;
+    if (aa == null) return 1;
+    if (bb == null) return -1;
 
     const aCatchAll = aa.startsWith('*:');
     const bCatchAll = bb.startsWith('*:');
@@ -110,5 +138,5 @@ export function compareRoutePriority(a: string, b: string): number {
     if (aDynamic !== bDynamic) return aDynamic ? 1 : -1;
   }
 
-  return aSegs.length - bSegs.length;
+  return 0;
 }

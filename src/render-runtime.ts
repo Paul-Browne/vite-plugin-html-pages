@@ -1,7 +1,11 @@
-import { invalidHtmlReturn, pageError } from './errors';
+import { invalidHtmlReturn, pageError, missingDefaultExport } from './errors';
 import type { HtPageInfo, HtPageModule, HtPageRenderContext } from './types';
 
-export async function renderPage(page: HtPageInfo, mod: HtPageModule, dev = false): Promise<string> {
+export async function renderPage(
+  page: HtPageInfo,
+  mod: HtPageModule,
+  dev = false,
+): Promise<string> {
   const ctx: HtPageRenderContext = {
     page,
     params: page.params,
@@ -14,6 +18,11 @@ export async function renderPage(page: HtPageInfo, mod: HtPageModule, dev = fals
     }
 
     const entry = mod.default;
+
+    if (entry == null) {
+      throw missingDefaultExport(page);
+    }
+
     const html = typeof entry === 'function' ? await entry(ctx) : entry;
 
     if (typeof html !== 'string') {
