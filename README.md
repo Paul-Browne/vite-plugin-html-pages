@@ -167,15 +167,16 @@ src/
 
 Routes are generated directly from the filesystem.
 
-| File | URL |
-|-----|-----|
-| `index.ht.js` | `/` |
-| `about.ht.js` | `/about` |
-| `blog/[slug].ht.js` | `/blog/my-post` |
-| `blog/[year]/[slug].ht.js` | `/blog/2026/my-post` |
-| `docs/[...slug].ht.js` | `/docs/api/auth/login` |
-| `docs/[...slug]?.ht.js` | `/docs` or `/docs/getting-started` |
-| `(admin)/users.ht.js` | `/users` |
+
+| Feature | File | URL |
+|-----|-----|-----|
+| static routes | `index.ht.js` | `/` |
+| dynamic routes |  `blog/[slug].ht.js` | `/blog/my-post` |
+| multiple params | `blog/[year]/[slug].ht.js` | `/blog/2026/my-post` |
+| catch-all | `docs/[...slug].ht.js` | `/docs/api/auth/login` |
+| optional catch-all | `docs/[...slug]?.ht.js` | `/docs` or `/docs/getting-started` |
+| index routes | `products/[product]/index.ht.js` | `/products/iphone-18` |
+| route groups | `(admin)/users.ht.js` | `/users` |
 
 ---
 
@@ -226,13 +227,35 @@ Matches:
 
 ```
 /blog/2026/vite-routing
+/blog/2025/my-first-post
 ```
 
-Params:
+Example:
 
-```
-params.year
-params.slug
+``` js
+import { fragment, html, body, h1 } from 'javascript-to-html'
+
+export function generateStaticParams() {
+  return [
+    { 
+      year: 2026,
+      slug: "vite-routing"
+    },
+    { 
+      year: 2025,
+      slug: 'my-first-post'
+    }
+  ]
+}
+
+export default ({ params }) => fragment(
+  '<!doctype html>',
+  html(
+    body(
+      h1(params.slug)
+    )
+  )
+)
 ```
 
 ---
