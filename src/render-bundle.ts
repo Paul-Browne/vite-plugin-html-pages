@@ -1,8 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { rollup, type Plugin as RollupPlugin } from 'rollup';
-import { nodeResolve } from '@rollup/plugin-node-resolve';
+import type { Plugin as RollupPlugin } from 'rollup';
 
 import { createManifestModule } from './manifest';
 import type { HtPageInfo } from './types';
@@ -30,6 +29,11 @@ export async function buildRenderBundle(args: {
   ssrPlugins?: RollupPlugin[];
 }): Promise<string> {
   const { entries, cacheDir, ssrPlugins = [] } = args;
+
+  const [{ rollup }, { nodeResolve }] = await Promise.all([
+    import('rollup'),
+    import('@rollup/plugin-node-resolve'),
+  ]);
 
   const manifestSource = createManifestModule(entries);
   const hash = await createRenderBundleHash(entries, manifestSource);

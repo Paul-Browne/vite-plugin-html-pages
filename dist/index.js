@@ -1,11 +1,9 @@
 // src/plugin.ts
-import path4 from "path";
 import { pathToFileURL } from "url";
 import pLimit from "p-limit";
 
 // src/discover.ts
 import path2 from "path";
-import fg from "fast-glob";
 
 // src/path-utils.ts
 import path from "path";
@@ -153,15 +151,13 @@ var CACHE_DIR_NAME = `node_modules/.cache/${PLUGIN_NAME}`;
 
 // src/discover.ts
 async function discoverEntryPages(root, options) {
-  const rawInclude = Array.isArray(options.include) ? options.include : [options.include ?? "src/**/*.ht.js"];
-  let include = rawInclude.filter((p) => typeof p === "string" && p.length > 0);
-  if (include.length === 0) {
-    include = ["src/**/*.ht.js"];
-  }
+  const fgModule = await import("fast-glob");
+  const fg = fgModule.default ?? fgModule;
+  const include = Array.isArray(options.include) ? options.include : [options.include ?? "src/**/*.ht.js"];
   const exclude = Array.isArray(options.exclude) ? options.exclude : options.exclude ? [options.exclude] : [];
   const pagesDir = options.pagesDir ?? "src";
   const pagesRoot = normalizeFsPath(path2.join(root, pagesDir));
-  const files = await fg(include, {
+  const files = await fg.glob(include, {
     cwd: root,
     ignore: exclude,
     absolute: true
@@ -337,94 +333,6 @@ async function buildPageIndex(args) {
   return pages;
 }
 
-// src/render-bundle.ts
-import path3 from "path";
-import fs from "fs/promises";
-import { createHash } from "crypto";
-import { rollup } from "rollup";
-import { nodeResolve } from "@rollup/plugin-node-resolve";
-
-// src/manifest.ts
-function js(value) {
-  return JSON.stringify(value);
-}
-function createManifestModule(entries) {
-  const imports = entries.map((page, i) => `import * as page${i} from ${js(page.entryPath)};`).join("\n");
-  const records = entries.map(
-    (page, i) => `{
-  page: ${js(page)},
-  mod: page${i}
-}`
-  ).join(",\n");
-  return `${imports}
-
-export const manifest = [
-${records}
-];
-`;
-}
-
-// src/render-bundle.ts
-async function createRenderBundleHash(entries, manifestSource) {
-  const hash = createHash("sha256");
-  hash.update(manifestSource);
-  for (const entry of entries) {
-    hash.update(entry.entryPath);
-    const source = await fs.readFile(entry.entryPath, "utf8");
-    hash.update(source);
-  }
-  return hash.digest("hex").slice(0, 12);
-}
-async function buildRenderBundle(args) {
-  const { entries, cacheDir, ssrPlugins = [] } = args;
-  const manifestSource = createManifestModule(entries);
-  const hash = await createRenderBundleHash(entries, manifestSource);
-  const bundlePath = path3.join(cacheDir, `render-${hash}.mjs`);
-  await fs.mkdir(cacheDir, { recursive: true });
-  try {
-    await fs.access(bundlePath);
-    return bundlePath;
-  } catch {
-  }
-  const bundle = await rollup({
-    input: VIRTUAL_MANIFEST_ID,
-    plugins: [
-      {
-        name: `${PLUGIN_NAME}:virtual-manifest`,
-        resolveId(id) {
-          return id === VIRTUAL_MANIFEST_ID ? id : null;
-        },
-        load(id) {
-          return id === VIRTUAL_MANIFEST_ID ? manifestSource : null;
-        }
-      },
-      nodeResolve({
-        preferBuiltins: true,
-        exportConditions: ["node"]
-      }),
-      ...ssrPlugins
-    ],
-    treeshake: true
-  });
-  try {
-    const { output } = await bundle.generate({
-      format: "esm",
-      exports: "named",
-      inlineDynamicImports: true
-    });
-    const chunk = output.find((item) => item.type === "chunk");
-    if (!chunk || chunk.type !== "chunk") {
-      throw new Error(
-        `[${PLUGIN_NAME}] Failed to generate HT pages render bundle.`
-      );
-    }
-    await fs.writeFile(bundlePath, chunk.code, "utf8");
-    return bundlePath;
-  } finally {
-    await bundle.close();
-  }
-}
-
 // src/plugin.ts
 function chunkArray(items, size) {
   const out = [];
@@ -433,9 +341,9 @@ function chunkArray(items, size) {
   }
   return out;
 }
-async function importManifest(bundlePath) {
-  const mod = await import(pathToFileURL(bundlePath).href + `?t=${Date.now()}`);
-  return mod.manifest;
+async function importPageModule(entryPath) {
+  const mod = await import(pathToFileURL(entryPath).href + `?t=${Date.now()}`);
+  return mod;
 }
 function htPages(options = {}) {
   let root = process.cwd();
@@ -475,24 +383,17 @@ function htPages(options = {}) {
   }
   async function buildPagesPipeline() {
     const entries = await discoverEntryPages(root, options);
-    const cacheDir = path4.join(root, CACHE_DIR_NAME);
-    const bundlePath = await buildRenderBundle({
-      entries,
-      cacheDir,
-      ssrPlugins: options.ssrPlugins
-    });
-    logDebug(options.debug, "render bundle", bundlePath);
-    const manifest = await importManifest(bundlePath);
     const modulesByEntry = /* @__PURE__ */ new Map();
-    for (const rec of manifest) {
-      modulesByEntry.set(rec.page.entryPath, rec.mod);
+    for (const entry of entries) {
+      const mod = await importPageModule(entry.entryPath);
+      modulesByEntry.set(entry.entryPath, mod);
     }
     const pages = await buildPageIndex({
       entries,
       modulesByEntry,
       cleanUrls
     });
-    return { entries, bundlePath, modulesByEntry, pages };
+    return { entries, modulesByEntry, pages };
   }
   return {
     name: PLUGIN_NAME,
@@ -633,9 +534,9 @@ ${rssItems}
 }
 
 // src/fetch-cache.ts
-import fs2 from "fs/promises";
-import path5 from "path";
-import { createHash as createHash2 } from "crypto";
+import fs from "fs/promises";
+import path3 from "path";
+import { createHash } from "crypto";
 function createDefaultCacheKey(input, init) {
   const raw = JSON.stringify({
     url: String(input),
@@ -643,10 +544,10 @@ function createDefaultCacheKey(input, init) {
     headers: init?.headers ?? {},
     body: init?.body ?? null
   });
-  return createHash2("sha256").update(raw).digest("hex");
+  return createHash("sha256").update(raw).digest("hex");
 }
 function getCacheFilePath(cacheKey) {
-  return path5.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
+  return path3.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
 }
 async function fetchAndCache(input, init, options = {}) {
   const maxAge = options.maxAge ?? 60 * 60;
@@ -656,10 +557,10 @@ async function fetchAndCache(input, init, options = {}) {
   }
   const cacheKey = options.cacheKey ?? createDefaultCacheKey(input, init);
   const filePath = getCacheFilePath(cacheKey);
-  await fs2.mkdir(path5.dirname(filePath), { recursive: true });
+  await fs.mkdir(path3.dirname(filePath), { recursive: true });
   if (!options.forceRefresh) {
     try {
-      const raw = await fs2.readFile(filePath, "utf8");
+      const raw = await fs.readFile(filePath, "utf8");
       const cached = JSON.parse(raw);
       const ageSeconds = (Date.now() - cached.timestamp) / 1e3;
       if (ageSeconds <= maxAge) {
@@ -681,7 +582,7 @@ async function fetchAndCache(input, init, options = {}) {
     headers: [...res.headers.entries()],
     body
   };
-  await fs2.writeFile(filePath, JSON.stringify(record), "utf8");
+  await fs.writeFile(filePath, JSON.stringify(record), "utf8");
   return new Response(body, {
     status: res.status,
     statusText: res.statusText,

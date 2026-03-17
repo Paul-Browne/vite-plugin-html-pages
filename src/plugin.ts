@@ -1,4 +1,4 @@
-import path from 'node:path';
+// import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import pLimit from 'p-limit';
 import type { Plugin, ViteDevServer } from 'vite';
@@ -6,14 +6,12 @@ import type { Plugin, ViteDevServer } from 'vite';
 import { discoverEntryPages } from './discover';
 import { installDevServer } from './dev-server';
 import { buildPageIndex } from './page-index';
-import { buildRenderBundle } from './render-bundle';
 import { renderPage } from './render-runtime';
 
 import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
 import {
   PLUGIN_NAME,
   VIRTUAL_BUILD_ENTRY_ID,
-  CACHE_DIR_NAME,
 } from './constants';
 
 function chunkArray<T>(items: T[], size: number): T[][] {
@@ -24,11 +22,9 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-async function importManifest(
-  bundlePath: string,
-): Promise<Array<{ page: HtPageInfo; mod: HtPageModule }>> {
-  const mod = await import(pathToFileURL(bundlePath).href + `?t=${Date.now()}`);
-  return mod.manifest as Array<{ page: HtPageInfo; mod: HtPageModule }>;
+async function importPageModule(entryPath: string): Promise<HtPageModule> {
+  const mod = await import(pathToFileURL(entryPath).href + `?t=${Date.now()}`);
+  return mod as HtPageModule;
 }
 
 export function htPages(options: HtPagesPluginOptions = {}): Plugin {
@@ -80,21 +76,11 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
   async function buildPagesPipeline() {
     const entries = await discoverEntryPages(root, options);
-    const cacheDir = path.join(root, CACHE_DIR_NAME);
-
-    const bundlePath = await buildRenderBundle({
-      entries,
-      cacheDir,
-      ssrPlugins: options.ssrPlugins,
-    });
-
-    logDebug(options.debug, 'render bundle', bundlePath);
-
-    const manifest = await importManifest(bundlePath);
     const modulesByEntry = new Map<string, HtPageModule>();
 
-    for (const rec of manifest) {
-      modulesByEntry.set(rec.page.entryPath, rec.mod);
+    for (const entry of entries) {
+      const mod = await importPageModule(entry.entryPath);
+      modulesByEntry.set(entry.entryPath, mod);
     }
 
     const pages = await buildPageIndex({
@@ -103,7 +89,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       cleanUrls,
     });
 
-    return { entries, bundlePath, modulesByEntry, pages };
+    return { entries, modulesByEntry, pages };
   }
 
   return {
@@ -177,7 +163,6 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       }
 
       logDebug(options.debug, 'page updated', ctx.file);
-
       await loadDevPages();
       return undefined;
     },

@@ -1,5 +1,4 @@
 import path from 'node:path';
-import fg from 'fast-glob';
 import { normalizeFsPath, toPosix } from './path-utils';
 import { getParamNames, isDynamicPage, toRoutePattern } from './route-utils';
 import type { HtPageInfo, HtPagesPluginOptions } from './types';
@@ -9,13 +8,12 @@ export async function discoverEntryPages(
   root: string,
   options: HtPagesPluginOptions,
 ): Promise<HtPageInfo[]> {
-  const rawInclude = Array.isArray(options.include)
+  const fgModule = await import('fast-glob');
+  const fg = (fgModule.default ?? fgModule) as typeof import('fast-glob');
+
+  const include = Array.isArray(options.include)
     ? options.include
     : [options.include ?? 'src/**/*.ht.js'];
-  let include = rawInclude.filter((p): p is string => typeof p === 'string' && p.length > 0);
-  if (include.length === 0) {
-    include = ['src/**/*.ht.js'];
-  }
 
   const exclude = Array.isArray(options.exclude)
     ? options.exclude
@@ -26,7 +24,7 @@ export async function discoverEntryPages(
   const pagesDir = options.pagesDir ?? 'src';
   const pagesRoot = normalizeFsPath(path.join(root, pagesDir));
 
-  const files = await fg(include, {
+  const files = await fg.glob(include, {
     cwd: root,
     ignore: exclude,
     absolute: true,
