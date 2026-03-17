@@ -81,6 +81,7 @@ Get:
 - Route groups `(admin)/users.ht.js`
 - Index routes `blog/[slug]/index.ht.js`
 - Static params generation
+- Fetch caching for data loading
 - Dev server SSR rendering
 - Parallel static generation
 - Automatic `404.html`
@@ -356,6 +357,48 @@ export async function data({ params }) {
   return { title: params.slug }
 }
 ```
+
+---
+
+# Caching
+
+Use `fetchAndCache` for HTTP requests during static generation. Responses are
+cached to avoid repeated network calls across page builds.
+
+```js
+import { fetchAndCache } from 'vite-plugin-htjs-pages'
+
+export async function data({ params }) {
+  const res = await fetchAndCache(
+    `https://api.example.com/posts/${params.slug}`,
+    {
+      // fetch API options
+    },
+    { maxAge: 3600 }
+  )
+  const post = await res.json()
+  return { post }
+}
+```
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `maxAge` | Cache TTL in seconds (default: 3600) |
+| `cacheKey` | Custom cache key (default: hash of URL + method + headers) |
+| `forceRefresh` | Bypass cache and fetch fresh |
+| `cache` | `'auto'` \| `'memory'` \| `'fs'` \| `'none'` |
+
+## Cache modes
+
+- **`auto`** (default): memory in dev, filesystem in production
+- **`memory`**: in-process cache, cleared when the build process exits
+- **`fs`**: persisted under `node_modules/.cache/vite-plugin-htjs-pages/fetch/`
+- **`none`**: no caching, always fetches
+
+Only `GET` requests are cached by default. For other methods, provide a
+`cacheKey` to enable caching.
 
 ---
 

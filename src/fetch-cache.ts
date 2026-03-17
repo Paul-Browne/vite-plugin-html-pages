@@ -3,10 +3,12 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { CACHE_DIR_NAME } from './constants';
 
+export type FetchCacheMode = 'auto' | 'memory' | 'fs' | 'none';
 export interface FetchAndCacheOptions {
   maxAge?: number;
   cacheKey?: string;
   forceRefresh?: boolean;
+  cache?: FetchCacheMode;
 }
 
 type CachedResponseRecord = {
@@ -16,6 +18,8 @@ type CachedResponseRecord = {
   headers: [string, string][];
   body: string;
 };
+
+const memoryCache = new Map<string, CachedResponseRecord>();
 
 function createDefaultCacheKey(
   input: RequestInfo | URL,
@@ -35,6 +39,37 @@ function getCacheFilePath(cacheKey: string): string {
   return path.join(process.cwd(), CACHE_DIR_NAME, 'fetch', `${cacheKey}.json`);
 }
 
+function getEffectiveCacheMode(
+  mode: FetchCacheMode | undefined,
+): Exclude<FetchCacheMode, 'auto'> {
+  if (mode === 'memory' || mode === 'fs' || mode === 'none') {
+    return mode;
+  }
+
+  return process.env.NODE_ENV === 'production' ? 'fs' : 'memory';
+}
+
+function toResponse(cached: CachedResponseRecord): Response {
+  return new Response(cached.body, {
+    status: cached.status,
+    statusText: cached.statusText,
+    headers: cached.headers,
+  });
+}
+
+function isFresh(cached: CachedResponseRecord, maxAgeSeconds: number): boolean {
+  const ageSeconds = (Date.now() - cached.timestamp) / 1000;
+  return ageSeconds <= maxAgeSeconds;
+}
+
+export function clearMemoryFetchCache(): void {
+  memoryCache.clear();
+}
+
+export function deleteMemoryFetchCache(cacheKey: string): void {
+  memoryCache.delete(cacheKey);
+}
+
 export async function fetchAndCache(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -47,27 +82,37 @@ export async function fetchAndCache(
     return fetch(input, init);
   }
 
+  const cacheMode = getEffectiveCacheMode(options.cache);
   const cacheKey = options.cacheKey ?? createDefaultCacheKey(input, init);
+
+  if (cacheMode === 'none') {
+    return fetch(input, init);
+  }
+
+  if (cacheMode === 'memory' && !options.forceRefresh) {
+    const cached = memoryCache.get(cacheKey);
+
+    if (cached && isFresh(cached, maxAge)) {
+      return toResponse(cached);
+    }
+  }
+
   const filePath = getCacheFilePath(cacheKey);
 
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  if (cacheMode === 'fs') {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
 
-  if (!options.forceRefresh) {
-    try {
-      const raw = await fs.readFile(filePath, 'utf8');
-      const cached = JSON.parse(raw) as CachedResponseRecord;
+    if (!options.forceRefresh) {
+      try {
+        const raw = await fs.readFile(filePath, 'utf8');
+        const cached = JSON.parse(raw) as CachedResponseRecord;
 
-      const ageSeconds = (Date.now() - cached.timestamp) / 1000;
-
-      if (ageSeconds <= maxAge) {
-        return new Response(cached.body, {
-          status: cached.status,
-          statusText: cached.statusText,
-          headers: cached.headers,
-        });
+        if (isFresh(cached, maxAge)) {
+          return toResponse(cached);
+        }
+      } catch {
+        // cache miss or invalid cache; fetch fresh
       }
-    } catch {
-      // cache miss or invalid cache; fetch fresh
     }
   }
 
@@ -82,7 +127,11 @@ export async function fetchAndCache(
     body,
   };
 
-  await fs.writeFile(filePath, JSON.stringify(record), 'utf8');
+  if (cacheMode === 'memory') {
+    memoryCache.set(cacheKey, record);
+  } else if (cacheMode === 'fs') {
+    await fs.writeFile(filePath, JSON.stringify(record), 'utf8');
+  }
 
   return new Response(body, {
     status: res.status,

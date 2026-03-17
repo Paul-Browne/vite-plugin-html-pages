@@ -51,10 +51,12 @@ interface HtPagesPluginOptions {
 
 declare function htPages(options?: HtPagesPluginOptions): Plugin$1;
 
+type FetchCacheMode = 'auto' | 'memory' | 'fs' | 'none';
 interface FetchAndCacheOptions {
     maxAge?: number;
     cacheKey?: string;
     forceRefresh?: boolean;
+    cache?: FetchCacheMode;
 }
 declare function fetchAndCache(input: RequestInfo | URL, init?: RequestInit, options?: FetchAndCacheOptions): Promise<Response>;
 

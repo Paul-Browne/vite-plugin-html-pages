@@ -552,6 +552,7 @@ ${rssItems}
 import fs2 from "fs/promises";
 import path4 from "path";
 import { createHash } from "crypto";
+var memoryCache = /* @__PURE__ */ new Map();
 function createDefaultCacheKey(input, init) {
   const raw = JSON.stringify({
     url: String(input),
@@ -564,28 +565,52 @@ function createDefaultCacheKey(input, init) {
 function getCacheFilePath(cacheKey) {
   return path4.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
 }
+function getEffectiveCacheMode(mode) {
+  if (mode === "memory" || mode === "fs" || mode === "none") {
+    return mode;
+  }
+  return process.env.NODE_ENV === "production" ? "fs" : "memory";
+}
+function toResponse(cached) {
+  return new Response(cached.body, {
+    status: cached.status,
+    statusText: cached.statusText,
+    headers: cached.headers
+  });
+}
+function isFresh(cached, maxAgeSeconds) {
+  const ageSeconds = (Date.now() - cached.timestamp) / 1e3;
+  return ageSeconds <= maxAgeSeconds;
+}
 async function fetchAndCache(input, init, options = {}) {
   const maxAge = options.maxAge ?? 60 * 60;
   const method = (init?.method ?? "GET").toUpperCase();
   if (method !== "GET" && !options.cacheKey) {
     return fetch(input, init);
   }
+  const cacheMode = getEffectiveCacheMode(options.cache);
   const cacheKey = options.cacheKey ?? createDefaultCacheKey(input, init);
+  if (cacheMode === "none") {
+    return fetch(input, init);
+  }
+  if (cacheMode === "memory" && !options.forceRefresh) {
+    const cached = memoryCache.get(cacheKey);
+    if (cached && isFresh(cached, maxAge)) {
+      return toResponse(cached);
+    }
+  }
   const filePath = getCacheFilePath(cacheKey);
-  await fs2.mkdir(path4.dirname(filePath), { recursive: true });
-  if (!options.forceRefresh) {
-    try {
-      const raw = await fs2.readFile(filePath, "utf8");
-      const cached = JSON.parse(raw);
-      const ageSeconds = (Date.now() - cached.timestamp) / 1e3;
-      if (ageSeconds <= maxAge) {
-        return new Response(cached.body, {
-          status: cached.status,
-          statusText: cached.statusText,
-          headers: cached.headers
-        });
+  if (cacheMode === "fs") {
+    await fs2.mkdir(path4.dirname(filePath), { recursive: true });
+    if (!options.forceRefresh) {
+      try {
+        const raw = await fs2.readFile(filePath, "utf8");
+        const cached = JSON.parse(raw);
+        if (isFresh(cached, maxAge)) {
+          return toResponse(cached);
+        }
+      } catch {
       }
-    } catch {
     }
   }
   const res = await fetch(input, init);
@@ -597,7 +622,11 @@ async function fetchAndCache(input, init, options = {}) {
     headers: [...res.headers.entries()],
     body
   };
-  await fs2.writeFile(filePath, JSON.stringify(record), "utf8");
+  if (cacheMode === "memory") {
+    memoryCache.set(cacheKey, record);
+  } else if (cacheMode === "fs") {
+    await fs2.writeFile(filePath, JSON.stringify(record), "utf8");
+  }
   return new Response(body, {
     status: res.status,
     statusText: res.statusText,
