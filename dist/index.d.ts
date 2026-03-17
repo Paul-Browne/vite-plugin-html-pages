@@ -51,4 +51,11 @@ interface HtPagesPluginOptions {
 
 declare function htPages(options?: HtPagesPluginOptions): Plugin$1;
 
-export { type HtPageInfo, type HtPageModule, type HtPageRenderContext, type HtPagesPluginOptions, type StaticParamRecord, htPages };
+interface FetchAndCacheOptions {
+    maxAge?: number;
+    cacheKey?: string;
+    forceRefresh?: boolean;
+}
+declare function fetchAndCache(input: RequestInfo | URL, init?: RequestInit, options?: FetchAndCacheOptions): Promise<Response>;
+
+export { type FetchAndCacheOptions, type HtPageInfo, type HtPageModule, type HtPageRenderContext, type HtPagesPluginOptions, type StaticParamRecord, fetchAndCache, htPages };

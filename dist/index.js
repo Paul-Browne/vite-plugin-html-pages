@@ -631,7 +631,65 @@ ${rssItems}
     }
   };
 }
+
+// src/fetch-cache.ts
+import fs2 from "fs/promises";
+import path5 from "path";
+import { createHash as createHash2 } from "crypto";
+function createDefaultCacheKey(input, init) {
+  const raw = JSON.stringify({
+    url: String(input),
+    method: init?.method ?? "GET",
+    headers: init?.headers ?? {},
+    body: init?.body ?? null
+  });
+  return createHash2("sha256").update(raw).digest("hex");
+}
+function getCacheFilePath(cacheKey) {
+  return path5.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
+}
+async function fetchAndCache(input, init, options = {}) {
+  const maxAge = options.maxAge ?? 60 * 60;
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method !== "GET" && !options.cacheKey) {
+    return fetch(input, init);
+  }
+  const cacheKey = options.cacheKey ?? createDefaultCacheKey(input, init);
+  const filePath = getCacheFilePath(cacheKey);
+  await fs2.mkdir(path5.dirname(filePath), { recursive: true });
+  if (!options.forceRefresh) {
+    try {
+      const raw = await fs2.readFile(filePath, "utf8");
+      const cached = JSON.parse(raw);
+      const ageSeconds = (Date.now() - cached.timestamp) / 1e3;
+      if (ageSeconds <= maxAge) {
+        return new Response(cached.body, {
+          status: cached.status,
+          statusText: cached.statusText,
+          headers: cached.headers
+        });
+      }
+    } catch {
+    }
+  }
+  const res = await fetch(input, init);
+  const body = await res.text();
+  const record = {
+    timestamp: Date.now(),
+    status: res.status,
+    statusText: res.statusText,
+    headers: [...res.headers.entries()],
+    body
+  };
+  await fs2.writeFile(filePath, JSON.stringify(record), "utf8");
+  return new Response(body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers: res.headers
+  });
+}
 export {
+  fetchAndCache,
   htPages
 };
 //# sourceMappingURL=index.js.map
