@@ -157,7 +157,7 @@ async function discoverEntryPages(root, options) {
   const fgModule = await import("fast-glob");
   const fg = fgModule.default ?? fgModule;
   const pagesDir = options.pagesDir ?? "src";
-  const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [".ht.js"];
+  const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [".ht.js", ".html.js"];
   const include = Array.isArray(options.include) ? options.include : options.include ? [options.include] : buildDefaultIncludeGlobs(pagesDir, pageExtensions);
   const exclude = Array.isArray(options.exclude) ? options.exclude : options.exclude ? [options.exclude] : [];
   const pagesRoot = normalizeFsPath(path2.join(root, pagesDir));
