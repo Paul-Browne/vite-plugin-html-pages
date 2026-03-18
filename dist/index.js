@@ -524,6 +524,22 @@ function htPages(options = {}) {
             )
           );
         }
+        const notFoundPage = pages.find((p) => p.routePath === "/404");
+        if (notFoundPage) {
+          const mod = modulesByEntry.get(notFoundPage.entryPath);
+          if (!mod) {
+            throw new Error(
+              `[${PLUGIN_NAME}] Missing module for 404 page entry: ${notFoundPage.entryPath}`
+            );
+          }
+          const html = await renderPage(notFoundPage, mod, false);
+          this.emitFile({
+            type: "asset",
+            fileName: "404.html",
+            source: html
+          });
+          logDebug(options.debug, "generated 404.html");
+        }
         const sitemapBase = options.site ?? "";
         const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(
           (route) => !route.includes(":") && !route.includes("*")
@@ -539,6 +555,7 @@ ${sitemapRoutes.map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`)
             fileName: "sitemap.xml",
             source: sitemap
           });
+          logDebug(options.debug, "generated sitemap.xml");
         }
         if (options.rss?.site) {
           const routePrefix = options.rss.routePrefix ?? "/blog";
@@ -565,6 +582,7 @@ ${rssItems}
             fileName: "rss.xml",
             source: rss
           });
+          logDebug(options.debug, "generated rss.xml");
         }
         for (const [fileName, output] of Object.entries(bundle)) {
           if (output.type === "chunk" && output.facadeModuleId === VIRTUAL_BUILD_ENTRY_ID) {
