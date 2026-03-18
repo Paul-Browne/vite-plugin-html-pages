@@ -10,6 +10,29 @@ import { renderPage } from './render-runtime';
 import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
 import { PLUGIN_NAME, VIRTUAL_BUILD_ENTRY_ID } from './constants';
 
+import fs from 'node:fs';
+import path from 'node:path';
+
+let hasWarnedESM = false;
+
+function warnIfNotESM(root: string) {
+  try {
+    const pkgPath = path.join(root, 'package.json');
+
+    if (!fs.existsSync(pkgPath)) return;
+
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+
+    if (pkg.type !== 'module') {
+      console.warn(
+        `[${PLUGIN_NAME}] ⚠️ It is recommended to add "type": "module" to your package.json for optimal performance and to avoid Node ESM warnings.`,
+      );
+    }
+  } catch {
+    // silent — never break build
+  }
+}
+
 function chunkArray<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) {
@@ -123,6 +146,12 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
     configResolved(resolved) {
       root = resolved.root;
+
+      if (!hasWarnedESM) {
+        warnIfNotESM(root);
+        hasWarnedESM = true;
+      }
+
     },
 
     async buildStart() {

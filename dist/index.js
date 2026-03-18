@@ -375,6 +375,22 @@ async function buildPageIndex(args) {
 }
 
 // src/plugin.ts
+import fs from "fs";
+import path4 from "path";
+var hasWarnedESM = false;
+function warnIfNotESM(root) {
+  try {
+    const pkgPath = path4.join(root, "package.json");
+    if (!fs.existsSync(pkgPath)) return;
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+    if (pkg.type !== "module") {
+      console.warn(
+        `[${PLUGIN_NAME}] \u26A0\uFE0F It is recommended to add "type": "module" to your package.json for optimal performance and to avoid Node ESM warnings.`
+      );
+    }
+  } catch {
+  }
+}
 function chunkArray(items, size) {
   const out = [];
   for (let i = 0; i < items.length; i += size) {
@@ -465,6 +481,10 @@ function htPages(options = {}) {
     },
     configResolved(resolved) {
       root = resolved.root;
+      if (!hasWarnedESM) {
+        warnIfNotESM(root);
+        hasWarnedESM = true;
+      }
     },
     async buildStart() {
       const entries = await discoverEntryPages(root, options);
@@ -648,8 +668,8 @@ ${rssItems}
 }
 
 // src/fetch-cache.ts
-import fs from "fs/promises";
-import path4 from "path";
+import fs2 from "fs/promises";
+import path5 from "path";
 import { createHash } from "crypto";
 var memoryCache = /* @__PURE__ */ new Map();
 function createDefaultCacheKey(input, init) {
@@ -662,7 +682,7 @@ function createDefaultCacheKey(input, init) {
   return createHash("sha256").update(raw).digest("hex");
 }
 function getCacheFilePath(cacheKey) {
-  return path4.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
+  return path5.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
 }
 function getEffectiveCacheMode(mode) {
   if (mode === "memory" || mode === "fs" || mode === "none") {
@@ -700,10 +720,10 @@ async function fetchWithCache(input, init, options = {}) {
   }
   const filePath = getCacheFilePath(cacheKey);
   if (cacheMode === "fs") {
-    await fs.mkdir(path4.dirname(filePath), { recursive: true });
+    await fs2.mkdir(path5.dirname(filePath), { recursive: true });
     if (!options.forceRefresh) {
       try {
-        const raw = await fs.readFile(filePath, "utf8");
+        const raw = await fs2.readFile(filePath, "utf8");
         const cached = JSON.parse(raw);
         if (isFresh(cached, maxAge)) {
           return toResponse(cached);
@@ -724,7 +744,7 @@ async function fetchWithCache(input, init, options = {}) {
   if (cacheMode === "memory") {
     memoryCache.set(cacheKey, record);
   } else if (cacheMode === "fs") {
-    await fs.writeFile(filePath, JSON.stringify(record), "utf8");
+    await fs2.writeFile(filePath, JSON.stringify(record), "utf8");
   }
   return new Response(body, {
     status: res.status,
