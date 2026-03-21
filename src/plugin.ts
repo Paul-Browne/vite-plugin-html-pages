@@ -6,8 +6,14 @@ import { installDevServer } from './dev-server';
 import { createPageModuleLoader, closePageModuleLoader } from './module-loader';
 import { buildPageIndex } from './page-index';
 import { renderPage } from './render-runtime';
+import {
+  buildHtmlAssetReplacementMap,
+  collectHtmlAssetRefs,
+  rewriteHtmlAssetUrls,
+} from './assets';
 
 import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
+import type { HtmlAssetRef } from './assets';
 import { PLUGIN_NAME, VIRTUAL_BUILD_ENTRY_ID } from './constants';
 
 import fs from 'node:fs';
@@ -45,8 +51,10 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   let root = process.cwd();
   let server: ViteDevServer | null = null;
   let devPages: HtPageInfo[] = [];
+  let htmlAssetRefs = new Map<string, HtmlAssetRef>();
 
   const cleanUrls = options.cleanUrls ?? true;
+  const pagesDir = options.pagesDir ?? 'src';
 
   function logDebug(enabled: boolean | undefined, ...args: unknown[]) {
     if (!enabled) return;
@@ -151,15 +159,59 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
         warnIfNotESM(root);
         hasWarnedESM = true;
       }
-
     },
 
     async buildStart() {
       const entries = await discoverEntryPages(root, options);
-
+    
       for (const entry of entries) {
         this.addWatchFile(entry.entryPath);
       }
+    
+      // emitFile() is build-only
+      if (server) {
+        return;
+      }
+    
+      htmlAssetRefs.clear();
+    
+      const { modulesByEntry, pages } = await buildPagesPipeline();
+    
+      const htmlByPageKey = new Map<string, { html: string; pageDir?: string }>();
+    
+      for (const page of pages) {
+        const mod = modulesByEntry.get(page.entryPath);
+    
+        if (!mod) {
+          throw new Error(
+            `[${PLUGIN_NAME}] Missing module for page entry: ${page.entryPath}`,
+          );
+        }
+    
+        const html = await renderPage(page, mod, false);
+    
+        htmlByPageKey.set(page.entryPath, {
+          html,
+          pageDir: path.dirname(page.absolutePath),
+        });
+      }
+    
+      htmlAssetRefs = await collectHtmlAssetRefs({
+        ctx: this,
+        root,
+        pagesDir,
+        htmlByPageKey,
+      });
+    
+      logDebug(
+        options.debug,
+        'collected html assets',
+        [...htmlAssetRefs.values()].map((ref) => ({
+          kind: ref.kind,
+          originalUrl: ref.originalUrl,
+          absolutePath: ref.absolutePath,
+        })),
+      );
     },
 
     configureServer(_server) {
@@ -195,18 +247,30 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
     async generateBundle(_, bundle) {
       try {
         const { modulesByEntry, pages } = await buildPagesPipeline();
-    
+
+        const assetReplacements = buildHtmlAssetReplacementMap({
+          ctx: this,
+          refs: htmlAssetRefs,
+          bundle,
+        });
+
+        logDebug(
+          options.debug,
+          'asset replacements',
+          [...assetReplacements.entries()],
+        );
+
         logDebug(
           options.debug,
           'emitting pages',
           pages.map((p) => p.fileName),
         );
-    
+
         const limit = pLimit(options.renderConcurrency ?? 8);
         const batchSize =
           options.renderBatchSize ??
           Math.max(options.renderConcurrency ?? 8, 32);
-    
+
         // ---------------------------
         // 1. Render all pages
         // ---------------------------
@@ -215,15 +279,16 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
             batch.map((page) =>
               limit(async () => {
                 const mod = modulesByEntry.get(page.entryPath);
-    
+
                 if (!mod) {
                   throw new Error(
                     `[${PLUGIN_NAME}] Missing module for page entry: ${page.entryPath}`,
                   );
                 }
-    
-                const html = await renderPage(page, mod, false);
-    
+
+                let html = await renderPage(page, mod, false);
+                html = rewriteHtmlAssetUrls(html, assetReplacements);
+
                 this.emitFile({
                   type: 'asset',
                   fileName: options.mapOutputPath?.(page) ?? page.fileName,
@@ -233,7 +298,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
             ),
           );
         }
-    
+
         // ---------------------------
         // 2. 404.html
         // ---------------------------
@@ -248,7 +313,8 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
             );
           }
 
-          const html = await renderPage(notFoundPage, mod, false);
+          let html = await renderPage(notFoundPage, mod, false);
+          html = rewriteHtmlAssetUrls(html, assetReplacements);
 
           this.emitFile({
             type: 'asset',
@@ -259,49 +325,49 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
           logDebug(options.debug, 'generated 404.html from user page');
         } else {
           const default404 = `<!doctype html>
-        <html lang="en">
-          <head>
-            <meta charset="UTF-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <title>404 - Page Not Found</title>
-            <style>
-              :root {
-                color-scheme: light dark;
-              }
-              body {
-                margin: 0;
-                font-family: system-ui, sans-serif;
-                min-height: 100vh;
-                display: grid;
-                place-items: center;
-                padding: 2rem;
-              }
-              main {
-                max-width: 40rem;
-                text-align: center;
-              }
-              h1 {
-                font-size: 3rem;
-                margin: 0 0 1rem;
-              }
-              p {
-                margin: 0.5rem 0;
-                line-height: 1.5;
-              }
-              a {
-                color: inherit;
-              }
-            </style>
-          </head>
-          <body>
-            <main>
-              <h1>404</h1>
-              <p>Page not found.</p>
-              <p><a href="/">Go back home</a></p>
-            </main>
-          </body>
-        </html>
-        `;
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>404 - Page Not Found</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+      }
+      main {
+        max-width: 40rem;
+        text-align: center;
+      }
+      h1 {
+        font-size: 3rem;
+        margin: 0 0 1rem;
+      }
+      p {
+        margin: 0.5rem 0;
+        line-height: 1.5;
+      }
+      a {
+        color: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>404</h1>
+      <p>Page not found.</p>
+      <p><a href="/">Go back home</a></p>
+    </main>
+  </body>
+</html>
+`;
 
           this.emitFile({
             type: 'asset',
@@ -311,56 +377,56 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
           logDebug(options.debug, 'generated default 404.html');
         }
-    
+
         // ---------------------------
         // 3. Sitemap
         // ---------------------------
         const sitemapBase = options.site ?? '';
-    
+
         const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(
           (route) => !route.includes(':') && !route.includes('*'),
         );
-    
-        if (sitemapRoutes.length > 0) {
+
+        if (sitemapBase && sitemapRoutes.length > 0) {
           const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${sitemapRoutes
             .map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`)
             .join('\n')}\n</urlset>\n`;
-    
+
           this.emitFile({
             type: 'asset',
             fileName: 'sitemap.xml',
             source: sitemap,
           });
-    
+
           logDebug(options.debug, 'generated sitemap.xml');
         }
-    
+
         // ---------------------------
         // 4. RSS
         // ---------------------------
         if (options.rss?.site) {
           const routePrefix = options.rss.routePrefix ?? '/blog';
-    
+
           const rssItems = pages
             .filter((page) => page.routePath.startsWith(routePrefix))
             .map((page) => {
               const url = `${options.rss!.site}${page.routePath}`;
-    
+
               return `  <item>\n    <title>${page.routePath}</title>\n    <link>${url}</link>\n    <guid>${url}</guid>\n  </item>`;
             })
             .join('\n');
-    
+
           const rss = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n  <title>${options.rss.title ?? PLUGIN_NAME}</title>\n  <link>${options.rss.site}</link>\n  <description>${options.rss.description ?? 'RSS feed'}</description>\n${rssItems}\n</channel>\n</rss>\n`;
-    
+
           this.emitFile({
             type: 'asset',
             fileName: 'rss.xml',
             source: rss,
           });
-    
+
           logDebug(options.debug, 'generated rss.xml');
         }
-    
+
         // ---------------------------
         // 5. Remove virtual entry chunk
         // ---------------------------
@@ -375,6 +441,8 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       } finally {
         await closePageModuleLoader();
       }
-    }
+    },
   };
 }
+
+export default htPages;

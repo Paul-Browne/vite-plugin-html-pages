@@ -83,32 +83,6 @@ function expandStaticPaths(basePage, rows, cleanUrls) {
     };
   });
 }
-function routeMatch(pattern, urlPath) {
-  const a = normalizeRoutePath(pattern).split("/").filter(Boolean);
-  const b = normalizeRoutePath(urlPath).split("/").filter(Boolean);
-  const params = {};
-  for (let i = 0; i < a.length; i++) {
-    const patternSeg = a[i];
-    const urlSeg = b[i];
-    if (patternSeg.startsWith("*?:")) {
-      params[patternSeg.slice(3)] = i < b.length ? b.slice(i).map(decodeURIComponent).join("/") : "";
-      return params;
-    }
-    if (patternSeg.startsWith("*:")) {
-      const rest = b.slice(i);
-      if (rest.length === 0) return null;
-      params[patternSeg.slice(2)] = rest.map(decodeURIComponent).join("/");
-      return params;
-    }
-    if (!urlSeg) return null;
-    if (patternSeg.startsWith(":")) {
-      params[patternSeg.slice(1)] = decodeURIComponent(urlSeg);
-      continue;
-    }
-    if (patternSeg !== urlSeg) return null;
-  }
-  return a.length === b.length ? params : null;
-}
 function compareRoutePriority(a, b) {
   const aSegs = normalizeRoutePath(a).split("/").filter(Boolean);
   const bSegs = normalizeRoutePath(b).split("/").filter(Boolean);
@@ -189,6 +163,10 @@ async function discoverEntryPages(root, options) {
   });
 }
 
+// src/dev-server.ts
+import fs from "fs";
+import path4 from "path";
+
 // src/errors.ts
 function invalidHtmlReturn(page, value) {
   return new Error(
@@ -239,55 +217,6 @@ async function renderPage(page, mod, dev = false) {
   }
 }
 
-// src/dev-server.ts
-function isDynamicOnly(mod) {
-  return mod.dynamic === true || mod.prerender === false;
-}
-function installDevServer(args) {
-  const { server, getPages, getEntries } = args;
-  server.middlewares.use(async (req, res, next) => {
-    try {
-      if (!req.url || req.method !== "GET") return next();
-      const pathname = req.url.split("?")[0];
-      const pages = await getPages();
-      const staticPage = pages.find((p) => p.routePath === pathname);
-      if (staticPage) {
-        const mod = await server.ssrLoadModule(
-          `/${staticPage.relativePath}`
-        );
-        const html = await renderPage(staticPage, mod, true);
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(html);
-        return;
-      }
-      const entries = await getEntries();
-      for (const entry of entries) {
-        const mod = await server.ssrLoadModule(
-          `/${entry.relativePath}`
-        );
-        if (!isDynamicOnly(mod)) continue;
-        const params = routeMatch(entry.routePattern, pathname);
-        if (!params) continue;
-        const page = {
-          ...entry,
-          routePath: pathname,
-          fileName: "",
-          params
-        };
-        const html = await renderPage(page, mod, true);
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(html);
-        return;
-      }
-      next();
-    } catch (error) {
-      next(error);
-    }
-  });
-}
-
 // src/module-loader.ts
 import path3 from "path";
 import { createServer } from "vite";
@@ -326,6 +255,71 @@ async function closePageModuleLoader() {
     await buildServer.close();
     buildServer = null;
   }
+}
+
+// src/dev-server.ts
+function isStaticAssetRequest(url) {
+  return url.endsWith(".css") || url.endsWith(".js") || url.endsWith(".mjs") || url.endsWith(".ts") || url.endsWith(".png") || url.endsWith(".jpg") || url.endsWith(".jpeg") || url.endsWith(".gif") || url.endsWith(".svg") || url.endsWith(".webp") || url.endsWith(".ico") || url.endsWith(".woff") || url.endsWith(".woff2") || url.endsWith(".ttf") || url.endsWith(".otf");
+}
+function shouldSkipHtmlRouting(url) {
+  return url.startsWith("/@vite") || url.startsWith("/@fs/") || url.startsWith("/node_modules/") || url.startsWith("/src/") || url === "/favicon.ico" || isStaticAssetRequest(url);
+}
+function tryRewriteRootAssetToSrc(server, url) {
+  if (!url.startsWith("/")) return null;
+  if (!isStaticAssetRequest(url)) return null;
+  if (url.startsWith("/src/")) return null;
+  const root = server.config.root;
+  const candidate = path4.join(root, "src", url.slice(1));
+  if (fs.existsSync(candidate)) {
+    return `/src/${url.slice(1)}`;
+  }
+  return null;
+}
+function shouldUseDynamicRendering(mod) {
+  return mod.dynamic === true || mod.prerender === false;
+}
+function installDevServer(args) {
+  const { server, getPages } = args;
+  server.middlewares.use(async (req, res, next) => {
+    try {
+      const originalUrl = req.url ?? "/";
+      const url = originalUrl.split("?")[0];
+      const rewrittenAssetUrl = tryRewriteRootAssetToSrc(server, url);
+      if (rewrittenAssetUrl) {
+        req.url = rewrittenAssetUrl + originalUrl.slice(url.length);
+        return next();
+      }
+      if (shouldSkipHtmlRouting(url)) {
+        return next();
+      }
+      const pages = await getPages();
+      const page = pages.find((p) => p.routePath === url);
+      if (!page) {
+        return next();
+      }
+      const loadModule = await createPageModuleLoader({
+        mode: "dev",
+        root: server.config.root,
+        server
+      });
+      const mod = await loadModule(page.entryPath, page.relativePath);
+      if (!mod) {
+        return next();
+      }
+      if (!shouldUseDynamicRendering(mod) && page.dynamic) {
+        return next();
+      }
+      const html = await renderPage(page, mod, true);
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end(html);
+    } catch (error) {
+      server.config.logger.error(
+        `[${PLUGIN_NAME}] dev server render failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
+      );
+      next(error);
+    }
+  });
 }
 
 // src/page-index.ts
@@ -374,15 +368,158 @@ async function buildPageIndex(args) {
   return pages;
 }
 
+// src/assets.ts
+import fs2 from "fs";
+import path5 from "path";
+var EXTERNAL_URL_RE = /^(?:[a-z]+:)?\/\//i;
+function isLocalAssetUrl(url) {
+  return !!url && !url.startsWith("data:") && !url.startsWith("mailto:") && !url.startsWith("tel:") && !url.startsWith("#") && !EXTERNAL_URL_RE.test(url);
+}
+function stripQueryAndHash(url) {
+  return url.split("#")[0].split("?")[0];
+}
+function extractHtmlAssets(html) {
+  const assets = [];
+  for (const match of html.matchAll(
+    /<link\b[^>]*\brel=["']stylesheet["'][^>]*\bhref=["']([^"']+)["'][^>]*>/gi
+  )) {
+    assets.push({ kind: "css", url: match[1] });
+  }
+  for (const match of html.matchAll(
+    /<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi
+  )) {
+    assets.push({ kind: "js", url: match[1] });
+  }
+  return dedupeExtractedAssets(assets);
+}
+function dedupeExtractedAssets(assets) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const asset of assets) {
+    const key = `${asset.kind}:${asset.url}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(asset);
+  }
+  return out;
+}
+function resolveLocalAssetPath(args) {
+  const { root, pagesDir, pageDir, url } = args;
+  if (!isLocalAssetUrl(url)) return null;
+  const cleanUrl = stripQueryAndHash(url);
+  let abs;
+  if (cleanUrl.startsWith("/")) {
+    abs = path5.join(root, pagesDir, cleanUrl.slice(1));
+  } else if (cleanUrl.startsWith(`${pagesDir}/`)) {
+    abs = path5.join(root, cleanUrl);
+  } else {
+    const baseDir = pageDir ?? path5.join(root, pagesDir);
+    abs = path5.resolve(baseDir, cleanUrl);
+  }
+  return fs2.existsSync(abs) ? abs : null;
+}
+function emitHtmlAsset(args) {
+  const { ctx, kind, absolutePath } = args;
+  if (kind === "css" || kind === "js") {
+    return ctx.emitFile({
+      type: "chunk",
+      id: absolutePath,
+      name: path5.basename(absolutePath, path5.extname(absolutePath))
+    });
+  }
+  throw new Error(`[vite-plugin-html-pages] Unsupported asset kind: ${kind}`);
+}
+function replaceAllLiteral(input, search, replacement) {
+  return input.split(search).join(replacement);
+}
+function rewriteHtmlAssetUrls(html, replacements) {
+  let out = html;
+  for (const [originalUrl, builtUrl] of replacements) {
+    out = replaceAllLiteral(
+      out,
+      `href="${originalUrl}"`,
+      `href="${builtUrl}"`
+    );
+    out = replaceAllLiteral(
+      out,
+      `href='${originalUrl}'`,
+      `href='${builtUrl}'`
+    );
+    out = replaceAllLiteral(
+      out,
+      `src="${originalUrl}"`,
+      `src="${builtUrl}"`
+    );
+    out = replaceAllLiteral(
+      out,
+      `src='${originalUrl}'`,
+      `src='${builtUrl}'`
+    );
+  }
+  return out;
+}
+async function collectHtmlAssetRefs(args) {
+  const { ctx, root, pagesDir, htmlByPageKey } = args;
+  const refs = /* @__PURE__ */ new Map();
+  for (const { html, pageDir } of htmlByPageKey.values()) {
+    const assets = extractHtmlAssets(html);
+    for (const asset of assets) {
+      const abs = resolveLocalAssetPath({
+        root,
+        pagesDir,
+        pageDir,
+        url: asset.url
+      });
+      if (!abs) continue;
+      const key = `${asset.kind}:${asset.url}`;
+      if (refs.has(key)) continue;
+      const refId = emitHtmlAsset({
+        ctx,
+        kind: asset.kind,
+        absolutePath: abs
+      });
+      refs.set(key, {
+        kind: asset.kind,
+        originalUrl: asset.url,
+        absolutePath: abs,
+        refId
+      });
+    }
+  }
+  return refs;
+}
+function buildHtmlAssetReplacementMap(args) {
+  const { ctx, refs, bundle } = args;
+  const replacements = /* @__PURE__ */ new Map();
+  for (const ref of refs.values()) {
+    if (ref.kind === "js") {
+      const fileName = ctx.getFileName(ref.refId);
+      replacements.set(ref.originalUrl, `/${fileName}`);
+      continue;
+    }
+    if (ref.kind === "css") {
+      const jsEntryFile = ctx.getFileName(ref.refId);
+      const jsChunk = bundle[jsEntryFile];
+      if (jsChunk && jsChunk.type === "chunk" && "viteMetadata" in jsChunk && jsChunk.viteMetadata?.importedCss && jsChunk.viteMetadata.importedCss.size > 0) {
+        const cssFile = [...jsChunk.viteMetadata.importedCss][0];
+        replacements.set(ref.originalUrl, `/${cssFile}`);
+        continue;
+      }
+      replacements.set(ref.originalUrl, `/${jsEntryFile}`);
+    }
+  }
+  return replacements;
+}
+
 // src/plugin.ts
-import fs from "fs";
-import path4 from "path";
+import fs3 from "fs";
+import path6 from "path";
 var hasWarnedESM = false;
 function warnIfNotESM(root) {
   try {
-    const pkgPath = path4.join(root, "package.json");
-    if (!fs.existsSync(pkgPath)) return;
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+    const pkgPath = path6.join(root, "package.json");
+    if (!fs3.existsSync(pkgPath)) return;
+    const pkg = JSON.parse(fs3.readFileSync(pkgPath, "utf8"));
     if (pkg.type !== "module") {
       console.warn(
         `[${PLUGIN_NAME}] \u26A0\uFE0F It is recommended to add "type": "module" to your package.json for optimal performance and to avoid Node ESM warnings.`
@@ -402,7 +539,9 @@ function htPages(options = {}) {
   let root = process.cwd();
   let server = null;
   let devPages = [];
+  let htmlAssetRefs = /* @__PURE__ */ new Map();
   const cleanUrls = options.cleanUrls ?? true;
+  const pagesDir = options.pagesDir ?? "src";
   function logDebug(enabled, ...args) {
     if (!enabled) return;
     console.log(`[${PLUGIN_NAME}]`, ...args);
@@ -491,6 +630,40 @@ function htPages(options = {}) {
       for (const entry of entries) {
         this.addWatchFile(entry.entryPath);
       }
+      if (server) {
+        return;
+      }
+      htmlAssetRefs.clear();
+      const { modulesByEntry, pages } = await buildPagesPipeline();
+      const htmlByPageKey = /* @__PURE__ */ new Map();
+      for (const page of pages) {
+        const mod = modulesByEntry.get(page.entryPath);
+        if (!mod) {
+          throw new Error(
+            `[${PLUGIN_NAME}] Missing module for page entry: ${page.entryPath}`
+          );
+        }
+        const html = await renderPage(page, mod, false);
+        htmlByPageKey.set(page.entryPath, {
+          html,
+          pageDir: path6.dirname(page.absolutePath)
+        });
+      }
+      htmlAssetRefs = await collectHtmlAssetRefs({
+        ctx: this,
+        root,
+        pagesDir,
+        htmlByPageKey
+      });
+      logDebug(
+        options.debug,
+        "collected html assets",
+        [...htmlAssetRefs.values()].map((ref) => ({
+          kind: ref.kind,
+          originalUrl: ref.originalUrl,
+          absolutePath: ref.absolutePath
+        }))
+      );
     },
     configureServer(_server) {
       server = _server;
@@ -517,6 +690,16 @@ function htPages(options = {}) {
     async generateBundle(_, bundle) {
       try {
         const { modulesByEntry, pages } = await buildPagesPipeline();
+        const assetReplacements = buildHtmlAssetReplacementMap({
+          ctx: this,
+          refs: htmlAssetRefs,
+          bundle
+        });
+        logDebug(
+          options.debug,
+          "asset replacements",
+          [...assetReplacements.entries()]
+        );
         logDebug(
           options.debug,
           "emitting pages",
@@ -534,7 +717,8 @@ function htPages(options = {}) {
                     `[${PLUGIN_NAME}] Missing module for page entry: ${page.entryPath}`
                   );
                 }
-                const html = await renderPage(page, mod, false);
+                let html = await renderPage(page, mod, false);
+                html = rewriteHtmlAssetUrls(html, assetReplacements);
                 this.emitFile({
                   type: "asset",
                   fileName: options.mapOutputPath?.(page) ?? page.fileName,
@@ -552,7 +736,8 @@ function htPages(options = {}) {
               `[${PLUGIN_NAME}] Missing module for 404 page entry: ${notFoundPage.entryPath}`
             );
           }
-          const html = await renderPage(notFoundPage, mod, false);
+          let html = await renderPage(notFoundPage, mod, false);
+          html = rewriteHtmlAssetUrls(html, assetReplacements);
           this.emitFile({
             type: "asset",
             fileName: "404.html",
@@ -561,49 +746,49 @@ function htPages(options = {}) {
           logDebug(options.debug, "generated 404.html from user page");
         } else {
           const default404 = `<!doctype html>
-        <html lang="en">
-          <head>
-            <meta charset="UTF-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <title>404 - Page Not Found</title>
-            <style>
-              :root {
-                color-scheme: light dark;
-              }
-              body {
-                margin: 0;
-                font-family: system-ui, sans-serif;
-                min-height: 100vh;
-                display: grid;
-                place-items: center;
-                padding: 2rem;
-              }
-              main {
-                max-width: 40rem;
-                text-align: center;
-              }
-              h1 {
-                font-size: 3rem;
-                margin: 0 0 1rem;
-              }
-              p {
-                margin: 0.5rem 0;
-                line-height: 1.5;
-              }
-              a {
-                color: inherit;
-              }
-            </style>
-          </head>
-          <body>
-            <main>
-              <h1>404</h1>
-              <p>Page not found.</p>
-              <p><a href="/">Go back home</a></p>
-            </main>
-          </body>
-        </html>
-        `;
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>404 - Page Not Found</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+      }
+      main {
+        max-width: 40rem;
+        text-align: center;
+      }
+      h1 {
+        font-size: 3rem;
+        margin: 0 0 1rem;
+      }
+      p {
+        margin: 0.5rem 0;
+        line-height: 1.5;
+      }
+      a {
+        color: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>404</h1>
+      <p>Page not found.</p>
+      <p><a href="/">Go back home</a></p>
+    </main>
+  </body>
+</html>
+`;
           this.emitFile({
             type: "asset",
             fileName: "404.html",
@@ -615,7 +800,7 @@ function htPages(options = {}) {
         const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(
           (route) => !route.includes(":") && !route.includes("*")
         );
-        if (sitemapRoutes.length > 0) {
+        if (sitemapBase && sitemapRoutes.length > 0) {
           const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${sitemapRoutes.map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`).join("\n")}
@@ -668,8 +853,8 @@ ${rssItems}
 }
 
 // src/fetch-cache.ts
-import fs2 from "fs/promises";
-import path5 from "path";
+import fs4 from "fs/promises";
+import path7 from "path";
 import { createHash } from "crypto";
 var memoryCache = /* @__PURE__ */ new Map();
 function createDefaultCacheKey(input, init) {
@@ -682,7 +867,7 @@ function createDefaultCacheKey(input, init) {
   return createHash("sha256").update(raw).digest("hex");
 }
 function getCacheFilePath(cacheKey) {
-  return path5.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
+  return path7.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
 }
 function getEffectiveCacheMode(mode) {
   if (mode === "memory" || mode === "fs" || mode === "none") {
@@ -720,10 +905,10 @@ async function fetchWithCache(input, init, options = {}) {
   }
   const filePath = getCacheFilePath(cacheKey);
   if (cacheMode === "fs") {
-    await fs2.mkdir(path5.dirname(filePath), { recursive: true });
+    await fs4.mkdir(path7.dirname(filePath), { recursive: true });
     if (!options.forceRefresh) {
       try {
-        const raw = await fs2.readFile(filePath, "utf8");
+        const raw = await fs4.readFile(filePath, "utf8");
         const cached = JSON.parse(raw);
         if (isFresh(cached, maxAge)) {
           return toResponse(cached);
@@ -744,7 +929,7 @@ async function fetchWithCache(input, init, options = {}) {
   if (cacheMode === "memory") {
     memoryCache.set(cacheKey, record);
   } else if (cacheMode === "fs") {
-    await fs2.writeFile(filePath, JSON.stringify(record), "utf8");
+    await fs4.writeFile(filePath, JSON.stringify(record), "utf8");
   }
   return new Response(body, {
     status: res.status,
