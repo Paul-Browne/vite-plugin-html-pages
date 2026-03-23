@@ -7,10 +7,12 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   target: 'node18',
+  platform: 'node',
   splitting: false,
   external: [
     'vite',
     'fast-glob',
-    'p-limit'
+    'p-limit',
+    'esbuild'
   ],
 });

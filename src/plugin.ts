@@ -1,14 +1,17 @@
 import pLimit from 'p-limit';
 import type { Plugin, ViteDevServer } from 'vite';
-import {
-  buildStaticAssetSource,
-  collectStaticAssets,
-} from './static-assets';
+
 import { discoverEntryPages } from './discover';
 import { installDevServer } from './dev-server';
 import { createPageModuleLoader, closePageModuleLoader } from './module-loader';
 import { buildPageIndex } from './page-index';
 import { renderPage } from './render-runtime';
+import {
+  buildProcessedStaticAssets,
+  collectStaticAssets,
+  copyStaticAssetSource,
+} from './static-assets';
+import { validateHtmlAssetReferences } from './html-asset-validator';
 import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
 import { PLUGIN_NAME, VIRTUAL_BUILD_ENTRY_ID } from './constants';
 
@@ -51,8 +54,8 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   const cleanUrls = options.cleanUrls ?? true;
   const pagesDir = options.pagesDir ?? 'src';
   const pageExtensions = options.pageExtensions?.length
-  ? options.pageExtensions
-  : ['.ht.js', '.html.js', '.ht.ts', '.html.ts'];
+    ? options.pageExtensions
+    : ['.ht.js', '.html.js', '.ht.ts', '.html.ts'];
 
   function logDebug(enabled: boolean | undefined, ...args: unknown[]) {
     if (!enabled) return;
@@ -161,21 +164,21 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
     async buildStart() {
       const entries = await discoverEntryPages(root, options);
-    
+
       for (const entry of entries) {
         this.addWatchFile(entry.entryPath);
       }
-    
+
       const staticAssets = await collectStaticAssets({
         root,
         pagesDir,
         pageExtensions,
       });
-    
+
       for (const asset of staticAssets) {
         this.addWatchFile(asset.absolutePath);
       }
-    
+
       logDebug(
         options.debug,
         'static assets',
@@ -220,60 +223,85 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
     async generateBundle(_, bundle) {
       try {
         const { modulesByEntry, pages } = await buildPagesPipeline();
-    
+
         const staticAssets = await collectStaticAssets({
           root,
           pagesDir,
           pageExtensions,
         });
-    
+
         logDebug(
           options.debug,
           'emitting pages',
           pages.map((p) => p.fileName),
         );
-    
+
         logDebug(
           options.debug,
           'emitting static assets',
-          staticAssets.map((asset) => asset.outputFileName),
+          staticAssets.map((asset) => ({
+            kind: asset.kind,
+            input: asset.relativePathFromSrc,
+            output: asset.outputFileName,
+          })),
         );
-    
+
         const limit = pLimit(options.renderConcurrency ?? 8);
         const batchSize =
           options.renderBatchSize ??
           Math.max(options.renderConcurrency ?? 8, 32);
-    
-        // ---------------------------
-        // 1. Emit static assets
-        // ---------------------------
+
+        const processedOutputs = await buildProcessedStaticAssets({
+          root,
+          pagesDir,
+          assets: staticAssets,
+          minify: true,
+          sourcemap: false,
+        });
+
+        for (const [fileName, source] of processedOutputs) {
+          this.emitFile({
+            type: 'asset',
+            fileName,
+            source,
+          });
+        }
+
         for (const asset of staticAssets) {
-          const source = await buildStaticAssetSource(asset);
-    
+          if (asset.kind !== 'copy') continue;
+
+          const source = await copyStaticAssetSource(asset);
+
           this.emitFile({
             type: 'asset',
             fileName: asset.outputFileName,
             source,
           });
         }
-    
-        // ---------------------------
-        // 2. Render all pages
-        // ---------------------------
+
         for (const batch of chunkArray(pages, batchSize)) {
           await Promise.all(
             batch.map((page) =>
               limit(async () => {
                 const mod = modulesByEntry.get(page.entryPath);
-    
+
                 if (!mod) {
                   throw new Error(
                     `[${PLUGIN_NAME}] Missing module for page entry: ${page.entryPath}`,
                   );
                 }
-    
+
                 const html = await renderPage(page, mod, false);
-    
+
+                validateHtmlAssetReferences({
+                  root,
+                  pagesDir,
+                  html,
+                  pluginName: PLUGIN_NAME,
+                  pageLabel: page.relativePath,
+                  missingAssets: options.missingAssets ?? 'error',
+                });
+                
                 this.emitFile({
                   type: 'asset',
                   fileName: options.mapOutputPath?.(page) ?? page.fileName,
@@ -283,137 +311,136 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
             ),
           );
         }
-    
-        // ---------------------------
-        // 3. 404.html
-        // ---------------------------
+
         const notFoundPage = pages.find((p) => p.routePath === '/404');
-    
+
         if (notFoundPage) {
           const mod = modulesByEntry.get(notFoundPage.entryPath);
-    
+
           if (!mod) {
             throw new Error(
               `[${PLUGIN_NAME}] Missing module for 404 page entry: ${notFoundPage.entryPath}`,
             );
           }
-    
+
           const html = await renderPage(notFoundPage, mod, false);
-    
+
+          validateHtmlAssetReferences({
+            root,
+            pagesDir,
+            html,
+            pluginName: PLUGIN_NAME,
+            pageLabel: notFoundPage.relativePath,
+            missingAssets: options.missingAssets ?? 'error',
+          });
+          
           this.emitFile({
             type: 'asset',
             fileName: '404.html',
             source: html,
           });
-    
+
           logDebug(options.debug, 'generated 404.html from user page');
         } else {
           const default404 = `<!doctype html>
-    <html lang="en">
-      <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>404 - Page Not Found</title>
-        <style>
-          :root {
-            color-scheme: light dark;
-          }
-          body {
-            margin: 0;
-            font-family: system-ui, sans-serif;
-            min-height: 100vh;
-            display: grid;
-            place-items: center;
-            padding: 2rem;
-          }
-          main {
-            max-width: 40rem;
-            text-align: center;
-          }
-          h1 {
-            font-size: 3rem;
-            margin: 0 0 1rem;
-          }
-          p {
-            margin: 0.5rem 0;
-            line-height: 1.5;
-          }
-          a {
-            color: inherit;
-          }
-        </style>
-      </head>
-      <body>
-        <main>
-          <h1>404</h1>
-          <p>Page not found.</p>
-          <p><a href="/">Go back home</a></p>
-        </main>
-      </body>
-    </html>
-    `;
-    
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>404 - Page Not Found</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+      }
+      main {
+        max-width: 40rem;
+        text-align: center;
+      }
+      h1 {
+        font-size: 3rem;
+        margin: 0 0 1rem;
+      }
+      p {
+        margin: 0.5rem 0;
+        line-height: 1.5;
+      }
+      a {
+        color: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>404</h1>
+      <p>Page not found.</p>
+      <p><a href="/">Go back home</a></p>
+    </main>
+  </body>
+</html>
+`;
+
           this.emitFile({
             type: 'asset',
             fileName: '404.html',
             source: default404,
           });
-    
+
           logDebug(options.debug, 'generated default 404.html');
         }
-    
-        // ---------------------------
-        // 4. Sitemap
-        // ---------------------------
+
         const sitemapBase = options.site ?? '';
-    
+
         const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(
           (route) => !route.includes(':') && !route.includes('*'),
         );
-    
+
         if (sitemapBase && sitemapRoutes.length > 0) {
           const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${sitemapRoutes
             .map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`)
             .join('\n')}\n</urlset>\n`;
-    
+
           this.emitFile({
             type: 'asset',
             fileName: 'sitemap.xml',
             source: sitemap,
           });
-    
+
           logDebug(options.debug, 'generated sitemap.xml');
         }
-    
-        // ---------------------------
-        // 5. RSS
-        // ---------------------------
-        if (options.rss?.site) {
-          const routePrefix = options.rss.routePrefix ?? '/blog';
-    
+
+        const rss = options.rss;
+
+        if (rss?.site) {
+          const routePrefix = rss.routePrefix ?? '/blog';
+        
           const rssItems = pages
             .filter((page) => page.routePath.startsWith(routePrefix))
             .map((page) => {
-              const url = `${options.rss!.site}${page.routePath}`;
-    
+              const url = `${rss.site}${page.routePath}`;
+        
               return `  <item>\n    <title>${page.routePath}</title>\n    <link>${url}</link>\n    <guid>${url}</guid>\n  </item>`;
             })
             .join('\n');
-    
-          const rss = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n  <title>${options.rss.title ?? PLUGIN_NAME}</title>\n  <link>${options.rss.site}</link>\n  <description>${options.rss.description ?? 'RSS feed'}</description>\n${rssItems}\n</channel>\n</rss>\n`;
-    
+        
+          const rssXml = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n  <title>${rss.title ?? PLUGIN_NAME}</title>\n  <link>${rss.site}</link>\n  <description>${rss.description ?? 'RSS feed'}</description>\n${rssItems}\n</channel>\n</rss>\n`;
+        
           this.emitFile({
             type: 'asset',
             fileName: 'rss.xml',
-            source: rss,
+            source: rssXml,
           });
-    
+        
           logDebug(options.debug, 'generated rss.xml');
         }
-    
-        // ---------------------------
-        // 6. Remove virtual entry chunk
-        // ---------------------------
+
         for (const [fileName, output] of Object.entries(bundle)) {
           if (
             output.type === 'chunk' &&

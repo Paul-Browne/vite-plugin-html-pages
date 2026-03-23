@@ -42,6 +42,7 @@ interface HtPagesPluginOptions {
     mapOutputPath?: (page: HtPageInfo) => string;
     debug?: boolean;
     site?: string;
+    missingAssets?: 'error' | 'warn';
     rss?: {
         site: string;
         title?: string;

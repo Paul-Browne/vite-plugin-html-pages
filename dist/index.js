@@ -1,82 +1,16 @@
 // src/plugin.ts
 import pLimit from "p-limit";
 
-// src/static-assets.ts
-import fs from "fs/promises";
-import path from "path";
-import fg from "fast-glob";
-import { transformWithEsbuild } from "vite";
-function normalizeSlashes(value) {
-  return value.replace(/\\/g, "/");
-}
-function hasAnySuffix(value, suffixes) {
-  return suffixes.some((suffix) => value.endsWith(suffix));
-}
-function toOutputFileName(relativePathFromSrc) {
-  if (relativePathFromSrc.endsWith(".ts")) {
-    return relativePathFromSrc.slice(0, -3) + ".js";
-  }
-  return relativePathFromSrc;
-}
-async function collectStaticAssets(args) {
-  const { root, pagesDir, pageExtensions } = args;
-  const srcDir = path.join(root, pagesDir);
-  const entries = await fg("**/*", {
-    cwd: srcDir,
-    onlyFiles: true,
-    dot: false,
-    absolute: false
-  });
-  const assets = [];
-  for (const entry of entries) {
-    const rel = normalizeSlashes(entry);
-    if (hasAnySuffix(rel, pageExtensions)) {
-      continue;
-    }
-    const absolutePath = path.join(srcDir, rel);
-    if (rel.endsWith(".ts")) {
-      assets.push({
-        absolutePath,
-        relativePathFromSrc: rel,
-        outputFileName: normalizeSlashes(toOutputFileName(rel)),
-        kind: "ts"
-      });
-      continue;
-    }
-    assets.push({
-      absolutePath,
-      relativePathFromSrc: rel,
-      outputFileName: normalizeSlashes(rel),
-      kind: "copy"
-    });
-  }
-  return assets;
-}
-async function buildStaticAssetSource(asset) {
-  if (asset.kind === "copy") {
-    return fs.readFile(asset.absolutePath);
-  }
-  const source = await fs.readFile(asset.absolutePath, "utf8");
-  const result = await transformWithEsbuild(source, asset.absolutePath, {
-    loader: "ts",
-    format: "esm",
-    target: "es2020",
-    sourcemap: false,
-    minify: false
-  });
-  return result.code;
-}
-
 // src/discover.ts
-import path3 from "path";
+import path2 from "path";
 
 // src/path-utils.ts
-import path2 from "path";
+import path from "path";
 function toPosix(value) {
   return value.replace(/\\/g, "/");
 }
 function normalizeFsPath(value) {
-  return path2.normalize(value);
+  return path.normalize(value);
 }
 function normalizeRoutePath(value) {
   const normalized = toPosix(value).replace(/\/+/g, "/");
@@ -197,7 +131,7 @@ async function discoverEntryPages(root, options) {
   const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [".ht.js", ".html.js", ".ht.ts", ".html.ts"];
   const include = Array.isArray(options.include) ? options.include : options.include ? [options.include] : buildDefaultIncludeGlobs(pagesDir, pageExtensions);
   const exclude = Array.isArray(options.exclude) ? options.exclude : options.exclude ? [options.exclude] : [];
-  const pagesRoot = normalizeFsPath(path3.join(root, pagesDir));
+  const pagesRoot = normalizeFsPath(path2.join(root, pagesDir));
   const files = await fg2.glob(include, {
     cwd: root,
     ignore: exclude,
@@ -205,8 +139,8 @@ async function discoverEntryPages(root, options) {
   });
   return files.sort().map((absolutePath) => {
     const entryPath = normalizeFsPath(absolutePath);
-    const relativePath = toPosix(path3.relative(root, entryPath));
-    const relativeFromPagesDir = toPosix(path3.relative(pagesRoot, entryPath));
+    const relativePath = toPosix(path2.relative(root, entryPath));
+    const relativeFromPagesDir = toPosix(path2.relative(pagesRoot, entryPath));
     if (relativeFromPagesDir.startsWith("../") || relativeFromPagesDir === "..") {
       throw new Error(
         `[${PLUGIN_NAME}] Page is outside pagesDir: ${entryPath} (pagesDir: ${pagesDir})`
@@ -230,8 +164,8 @@ async function discoverEntryPages(root, options) {
 }
 
 // src/dev-server.ts
-import fs2 from "fs";
-import path5 from "path";
+import fs from "fs";
+import path4 from "path";
 
 // src/errors.ts
 function invalidHtmlReturn(page, value) {
@@ -284,7 +218,7 @@ async function renderPage(page, mod, dev = false) {
 }
 
 // src/module-loader.ts
-import path4 from "path";
+import path3 from "path";
 import { createServer } from "vite";
 var buildServer = null;
 async function createPageModuleLoader(args) {
@@ -311,7 +245,7 @@ async function createPageModuleLoader(args) {
     buildServer = await createServer(config);
   }
   return async (entryPath) => {
-    const relativePath = "/" + path4.relative(root, entryPath).replace(/\\/g, "/");
+    const relativePath = "/" + path3.relative(root, entryPath).replace(/\\/g, "/");
     const mod = await buildServer.ssrLoadModule(relativePath);
     return mod;
   };
@@ -335,8 +269,8 @@ function tryRewriteRootAssetToSrc(server, url) {
   if (!isStaticAssetRequest(url)) return null;
   if (url.startsWith("/src/")) return null;
   const root = server.config.root;
-  const candidate = path5.join(root, "src", url.slice(1));
-  if (fs2.existsSync(candidate)) {
+  const candidate = path4.join(root, "src", url.slice(1));
+  if (fs.existsSync(candidate)) {
     return `/src/${url.slice(1)}`;
   }
   return null;
@@ -434,15 +368,279 @@ async function buildPageIndex(args) {
   return pages;
 }
 
-// src/plugin.ts
+// src/static-assets.ts
+import fs2 from "fs/promises";
+import path5 from "path";
+import fg from "fast-glob";
+import * as esbuild from "esbuild";
+import fsSync from "fs";
+function normalizeSlashes(value) {
+  return value.replace(/\\/g, "/");
+}
+function hasAnySuffix(value, suffixes) {
+  return suffixes.some((suffix) => value.endsWith(suffix));
+}
+function shouldIgnoreFile(rel) {
+  return rel.endsWith(".d.ts") || rel.endsWith(".map") || rel.endsWith(".tsbuildinfo") || rel.startsWith(".") || rel.includes("/.");
+}
+function isProcessableAsset(rel) {
+  return rel.endsWith(".js") || rel.endsWith(".mjs") || rel.endsWith(".ts") || rel.endsWith(".css");
+}
+function toOutputFileName(relativePathFromSrc) {
+  if (relativePathFromSrc.endsWith(".ts")) {
+    return relativePathFromSrc.slice(0, -3) + ".js";
+  }
+  return relativePathFromSrc;
+}
+async function collectStaticAssets(args) {
+  const { root, pagesDir, pageExtensions } = args;
+  const srcDir = path5.join(root, pagesDir);
+  const entries = await fg("**/*", {
+    cwd: srcDir,
+    onlyFiles: true,
+    dot: false,
+    absolute: false
+  });
+  const assets = [];
+  for (const entry of entries) {
+    const rel = normalizeSlashes(entry);
+    if (shouldIgnoreFile(rel)) continue;
+    if (hasAnySuffix(rel, pageExtensions)) continue;
+    const absolutePath = path5.join(srcDir, rel);
+    assets.push({
+      absolutePath,
+      relativePathFromSrc: rel,
+      outputFileName: normalizeSlashes(toOutputFileName(rel)),
+      kind: isProcessableAsset(rel) ? "process" : "copy"
+    });
+  }
+  return assets;
+}
+async function copyStaticAssetSource(asset) {
+  return fs2.readFile(asset.absolutePath);
+}
+async function buildProcessedStaticAssets(args) {
+  const { root, pagesDir, assets, minify = true, sourcemap = false } = args;
+  const processable = assets.filter((a) => a.kind === "process");
+  const out = /* @__PURE__ */ new Map();
+  if (processable.length === 0) {
+    return out;
+  }
+  const srcDir = path5.join(root, pagesDir);
+  const distDir = path5.join(root, "dist");
+  const warnedMissingAssets = /* @__PURE__ */ new Set();
+  const result = await esbuild.build({
+    entryPoints: processable.map((a) => a.absolutePath),
+    absWorkingDir: root,
+    outbase: srcDir,
+    outdir: distDir,
+    bundle: true,
+    splitting: true,
+    treeShaking: true,
+    minify,
+    sourcemap,
+    format: "esm",
+    target: "es2020",
+    platform: "browser",
+    write: false,
+    entryNames: "[dir]/[name]",
+    assetNames: "[dir]/[name]",
+    loader: {
+      ".css": "css",
+      ".png": "file",
+      ".jpg": "file",
+      ".jpeg": "file",
+      ".gif": "file",
+      ".svg": "file",
+      ".webp": "file",
+      ".woff": "file",
+      ".woff2": "file",
+      ".ttf": "file",
+      ".otf": "file"
+    },
+    plugins: [
+      {
+        name: "html-pages-root-url-resolver",
+        setup(build2) {
+          build2.onResolve({ filter: /^\// }, (resolveArgs) => {
+            if (path5.isAbsolute(resolveArgs.path) && fsSync.existsSync(resolveArgs.path)) {
+              return { path: resolveArgs.path };
+            }
+            const cleanPath = resolveArgs.path.slice(1);
+            const fromSrc = path5.join(srcDir, cleanPath);
+            if (fsSync.existsSync(fromSrc)) {
+              return { path: fromSrc };
+            }
+            const fromPublic = path5.join(root, "public", cleanPath);
+            if (fsSync.existsSync(fromPublic)) {
+              return {
+                path: resolveArgs.path,
+                external: true
+              };
+            }
+            const isCssUrlToken = resolveArgs.kind === "url-token";
+            if (isCssUrlToken) {
+              if (!warnedMissingAssets.has(resolveArgs.path)) {
+                warnedMissingAssets.add(resolveArgs.path);
+                console.warn(
+                  `[vite-plugin-html-pages] \u26A0\uFE0F Missing CSS asset: ${resolveArgs.path}
+  Looked in:
+  - ${fromSrc}
+  - ${fromPublic}`
+                );
+              }
+              return {
+                path: resolveArgs.path,
+                external: true
+              };
+            }
+            return {
+              path: fromSrc
+            };
+          });
+        }
+      }
+    ]
+  });
+  for (const file of result.outputFiles) {
+    const rel = normalizeSlashes(path5.relative(distDir, file.path));
+    out.set(rel, file.text ?? file.contents);
+  }
+  return out;
+}
+
+// src/html-asset-validator.ts
 import fs3 from "fs";
 import path6 from "path";
+function stripQueryAndHash(url) {
+  return url.split("#")[0].split("?")[0];
+}
+function isLocalRootUrl(url) {
+  return !!url && url.startsWith("/") && !url.startsWith("//");
+}
+function fileExistsForPublicUrl(root, pagesDir, url) {
+  const clean = stripQueryAndHash(url).slice(1);
+  const fromSrc = path6.join(root, pagesDir, clean);
+  if (fs3.existsSync(fromSrc)) return true;
+  const fromPublic = path6.join(root, "public", clean);
+  if (fs3.existsSync(fromPublic)) return true;
+  return false;
+}
+function collectScriptSrcs(html) {
+  const out = [];
+  for (const match of html.matchAll(
+    /<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi
+  )) {
+    out.push(match[1]);
+  }
+  return out;
+}
+function collectStylesheetHrefs(html) {
+  const out = [];
+  for (const match of html.matchAll(
+    /<link\b[^>]*\brel=["']stylesheet["'][^>]*\bhref=["']([^"']+)["'][^>]*>/gi
+  )) {
+    out.push(match[1]);
+  }
+  return out;
+}
+function collectLiteralDynamicImports(html) {
+  const out = [];
+  for (const match of html.matchAll(
+    /import\s*\(\s*["']([^"'`]+)["']\s*\)/gi
+  )) {
+    out.push(match[1]);
+  }
+  return out;
+}
+function unique(values) {
+  return [...new Set(values)];
+}
+function formatPageLabel(pageLabel) {
+  return pageLabel ? ` (${pageLabel})` : "";
+}
+function missingAssetMessage(args) {
+  const { pluginName, kind, url, root, pagesDir, pageLabel } = args;
+  const clean = stripQueryAndHash(url).slice(1);
+  const pageSuffix = formatPageLabel(pageLabel);
+  return `[${pluginName}] Missing ${kind}${pageSuffix}: ${url}
+Expected one of:
+- ${path6.join(root, pagesDir, clean)}
+- ${path6.join(root, "public", clean)}`;
+}
+function reportMissing(args) {
+  const message = missingAssetMessage(args);
+  if (args.mode === "warn") {
+    console.warn(`\u26A0\uFE0F ${message}`);
+    return;
+  }
+  throw new Error(message);
+}
+function validateHtmlAssetReferences(options) {
+  const {
+    root,
+    pagesDir,
+    html,
+    pluginName,
+    pageLabel,
+    missingAssets = "error"
+  } = options;
+  const scriptSrcs = unique(collectScriptSrcs(html)).filter(isLocalRootUrl);
+  const stylesheetHrefs = unique(collectStylesheetHrefs(html)).filter(isLocalRootUrl);
+  const literalDynamicImports = unique(collectLiteralDynamicImports(html)).filter(
+    isLocalRootUrl
+  );
+  for (const url of scriptSrcs) {
+    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
+      reportMissing({
+        mode: missingAssets,
+        pluginName,
+        kind: "JavaScript asset",
+        url,
+        root,
+        pagesDir,
+        pageLabel
+      });
+    }
+  }
+  for (const url of stylesheetHrefs) {
+    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
+      reportMissing({
+        mode: missingAssets,
+        pluginName,
+        kind: "stylesheet asset",
+        url,
+        root,
+        pagesDir,
+        pageLabel
+      });
+    }
+  }
+  for (const url of literalDynamicImports) {
+    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
+      console.warn(
+        `\u26A0\uFE0F ${missingAssetMessage({
+          pluginName,
+          kind: "literal dynamic import",
+          url,
+          root,
+          pagesDir,
+          pageLabel
+        })}`
+      );
+    }
+  }
+}
+
+// src/plugin.ts
+import fs4 from "fs";
+import path7 from "path";
 var hasWarnedESM = false;
 function warnIfNotESM(root) {
   try {
-    const pkgPath = path6.join(root, "package.json");
-    if (!fs3.existsSync(pkgPath)) return;
-    const pkg = JSON.parse(fs3.readFileSync(pkgPath, "utf8"));
+    const pkgPath = path7.join(root, "package.json");
+    if (!fs4.existsSync(pkgPath)) return;
+    const pkg = JSON.parse(fs4.readFileSync(pkgPath, "utf8"));
     if (pkg.type !== "module") {
       console.warn(
         `[${PLUGIN_NAME}] \u26A0\uFE0F It is recommended to add "type": "module" to your package.json for optimal performance and to avoid Node ESM warnings.`
@@ -609,12 +807,31 @@ function htPages(options = {}) {
         logDebug(
           options.debug,
           "emitting static assets",
-          staticAssets.map((asset) => asset.outputFileName)
+          staticAssets.map((asset) => ({
+            kind: asset.kind,
+            input: asset.relativePathFromSrc,
+            output: asset.outputFileName
+          }))
         );
         const limit = pLimit(options.renderConcurrency ?? 8);
         const batchSize = options.renderBatchSize ?? Math.max(options.renderConcurrency ?? 8, 32);
+        const processedOutputs = await buildProcessedStaticAssets({
+          root,
+          pagesDir,
+          assets: staticAssets,
+          minify: true,
+          sourcemap: false
+        });
+        for (const [fileName, source] of processedOutputs) {
+          this.emitFile({
+            type: "asset",
+            fileName,
+            source
+          });
+        }
         for (const asset of staticAssets) {
-          const source = await buildStaticAssetSource(asset);
+          if (asset.kind !== "copy") continue;
+          const source = await copyStaticAssetSource(asset);
           this.emitFile({
             type: "asset",
             fileName: asset.outputFileName,
@@ -632,6 +849,14 @@ function htPages(options = {}) {
                   );
                 }
                 const html = await renderPage(page, mod, false);
+                validateHtmlAssetReferences({
+                  root,
+                  pagesDir,
+                  html,
+                  pluginName: PLUGIN_NAME,
+                  pageLabel: page.relativePath,
+                  missingAssets: options.missingAssets ?? "error"
+                });
                 this.emitFile({
                   type: "asset",
                   fileName: options.mapOutputPath?.(page) ?? page.fileName,
@@ -650,6 +875,14 @@ function htPages(options = {}) {
             );
           }
           const html = await renderPage(notFoundPage, mod, false);
+          validateHtmlAssetReferences({
+            root,
+            pagesDir,
+            html,
+            pluginName: PLUGIN_NAME,
+            pageLabel: notFoundPage.relativePath,
+            missingAssets: options.missingAssets ?? "error"
+          });
           this.emitFile({
             type: "asset",
             fileName: "404.html",
@@ -658,49 +891,49 @@ function htPages(options = {}) {
           logDebug(options.debug, "generated 404.html from user page");
         } else {
           const default404 = `<!doctype html>
-    <html lang="en">
-      <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>404 - Page Not Found</title>
-        <style>
-          :root {
-            color-scheme: light dark;
-          }
-          body {
-            margin: 0;
-            font-family: system-ui, sans-serif;
-            min-height: 100vh;
-            display: grid;
-            place-items: center;
-            padding: 2rem;
-          }
-          main {
-            max-width: 40rem;
-            text-align: center;
-          }
-          h1 {
-            font-size: 3rem;
-            margin: 0 0 1rem;
-          }
-          p {
-            margin: 0.5rem 0;
-            line-height: 1.5;
-          }
-          a {
-            color: inherit;
-          }
-        </style>
-      </head>
-      <body>
-        <main>
-          <h1>404</h1>
-          <p>Page not found.</p>
-          <p><a href="/">Go back home</a></p>
-        </main>
-      </body>
-    </html>
-    `;
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>404 - Page Not Found</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+      }
+      main {
+        max-width: 40rem;
+        text-align: center;
+      }
+      h1 {
+        font-size: 3rem;
+        margin: 0 0 1rem;
+      }
+      p {
+        margin: 0.5rem 0;
+        line-height: 1.5;
+      }
+      a {
+        color: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>404</h1>
+      <p>Page not found.</p>
+      <p><a href="/">Go back home</a></p>
+    </main>
+  </body>
+</html>
+`;
           this.emitFile({
             type: "asset",
             fileName: "404.html",
@@ -725,22 +958,23 @@ ${sitemapRoutes.map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`)
           });
           logDebug(options.debug, "generated sitemap.xml");
         }
-        if (options.rss?.site) {
-          const routePrefix = options.rss.routePrefix ?? "/blog";
+        const rss = options.rss;
+        if (rss?.site) {
+          const routePrefix = rss.routePrefix ?? "/blog";
           const rssItems = pages.filter((page) => page.routePath.startsWith(routePrefix)).map((page) => {
-            const url = `${options.rss.site}${page.routePath}`;
+            const url = `${rss.site}${page.routePath}`;
             return `  <item>
     <title>${page.routePath}</title>
     <link>${url}</link>
     <guid>${url}</guid>
   </item>`;
           }).join("\n");
-          const rss = `<?xml version="1.0" encoding="UTF-8"?>
+          const rssXml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
 <channel>
-  <title>${options.rss.title ?? PLUGIN_NAME}</title>
-  <link>${options.rss.site}</link>
-  <description>${options.rss.description ?? "RSS feed"}</description>
+  <title>${rss.title ?? PLUGIN_NAME}</title>
+  <link>${rss.site}</link>
+  <description>${rss.description ?? "RSS feed"}</description>
 ${rssItems}
 </channel>
 </rss>
@@ -748,7 +982,7 @@ ${rssItems}
           this.emitFile({
             type: "asset",
             fileName: "rss.xml",
-            source: rss
+            source: rssXml
           });
           logDebug(options.debug, "generated rss.xml");
         }
@@ -765,8 +999,8 @@ ${rssItems}
 }
 
 // src/fetch-cache.ts
-import fs4 from "fs/promises";
-import path7 from "path";
+import fs5 from "fs/promises";
+import path8 from "path";
 import { createHash } from "crypto";
 var memoryCache = /* @__PURE__ */ new Map();
 function createDefaultCacheKey(input, init) {
@@ -779,7 +1013,7 @@ function createDefaultCacheKey(input, init) {
   return createHash("sha256").update(raw).digest("hex");
 }
 function getCacheFilePath(cacheKey) {
-  return path7.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
+  return path8.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
 }
 function getEffectiveCacheMode(mode) {
   if (mode === "memory" || mode === "fs" || mode === "none") {
@@ -817,10 +1051,10 @@ async function fetchWithCache(input, init, options = {}) {
   }
   const filePath = getCacheFilePath(cacheKey);
   if (cacheMode === "fs") {
-    await fs4.mkdir(path7.dirname(filePath), { recursive: true });
+    await fs5.mkdir(path8.dirname(filePath), { recursive: true });
     if (!options.forceRefresh) {
       try {
-        const raw = await fs4.readFile(filePath, "utf8");
+        const raw = await fs5.readFile(filePath, "utf8");
         const cached = JSON.parse(raw);
         if (isFresh(cached, maxAge)) {
           return toResponse(cached);
@@ -841,7 +1075,7 @@ async function fetchWithCache(input, init, options = {}) {
   if (cacheMode === "memory") {
     memoryCache.set(cacheKey, record);
   } else if (cacheMode === "fs") {
-    await fs4.writeFile(filePath, JSON.stringify(record), "utf8");
+    await fs5.writeFile(filePath, JSON.stringify(record), "utf8");
   }
   return new Response(body, {
     status: res.status,
