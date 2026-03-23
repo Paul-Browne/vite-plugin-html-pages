@@ -213,11 +213,16 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
     async handleHotUpdate(ctx) {
       if (!server) return;
-
+    
       logDebug(options.debug, 'file changed', ctx.file);
-
+    
       await loadDevPages();
-      return undefined;
+    
+      server.ws.send({
+        type: 'full-reload',
+      });
+    
+      return [];
     },
 
     async generateBundle(_, bundle) {

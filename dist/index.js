@@ -789,7 +789,10 @@ function htPages(options = {}) {
       if (!server) return;
       logDebug(options.debug, "file changed", ctx.file);
       await loadDevPages();
-      return void 0;
+      server.ws.send({
+        type: "full-reload"
+      });
+      return [];
     },
     async generateBundle(_, bundle) {
       try {
