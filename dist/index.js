@@ -28,11 +28,7 @@ function stripPageSuffix(filePath, extensions) {
 var DYNAMIC_SEGMENT_RE = /\[([A-Za-z0-9_]+)\]/g;
 var CATCH_ALL_SEGMENT_RE = /\[\.\.\.([A-Za-z0-9_]+)\]/g;
 var OPTIONAL_CATCH_ALL_SEGMENT_RE = /\[\.\.\.([A-Za-z0-9_]+)\]\?/g;
-var ANY_PARAM_RE = /\[(?:\.\.\.)?([A-Za-z0-9_]+)\]\??/g;
 var ROUTE_GROUP_RE = /(^|\/)\(([^)]+)\)(?=\/|$)/g;
-function getParamNames(relativeFromPagesDir) {
-  return [...relativeFromPagesDir.matchAll(ANY_PARAM_RE)].map((m) => m[1]);
-}
 function isDynamicPage(relativeFromPagesDir) {
   return /\[(?:\.\.\.)?[A-Za-z0-9_]+\]\??/.test(relativeFromPagesDir);
 }
@@ -111,9 +107,37 @@ function compareRoutePriority(a, b) {
   return bSegs.length - aSegs.length;
 }
 
+// src/route-params.ts
+function parseRouteParamSegment(segment) {
+  if (segment.startsWith("[...") && segment.endsWith("]?")) {
+    return {
+      name: segment.slice(4, -2),
+      type: "optional-catch-all"
+    };
+  }
+  if (segment.startsWith("[...") && segment.endsWith("]")) {
+    return {
+      name: segment.slice(4, -1),
+      type: "catch-all"
+    };
+  }
+  if (segment.startsWith("[") && segment.endsWith("]")) {
+    return {
+      name: segment.slice(1, -1),
+      type: "single"
+    };
+  }
+  return null;
+}
+function extractRouteParamDefinitions(routePattern) {
+  return routePattern.split("/").filter(Boolean).map((segment) => parseRouteParamSegment(segment)).filter((value) => value != null);
+}
+
 // src/constants.ts
 var PLUGIN_NAME = "vite-plugin-html-pages";
 var VIRTUAL_BUILD_ENTRY_ID = `\0${PLUGIN_NAME}:build-entry`;
+var VIRTUAL_PAGE_HELPER_ID = `${PLUGIN_NAME}/page`;
+var RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX = `\0${PLUGIN_NAME}/page:`;
 var VIRTUAL_MANIFEST_ID = `\0virtual:${PLUGIN_NAME}-manifest`;
 var CACHE_DIR_NAME = `node_modules/.cache/${PLUGIN_NAME}`;
 
@@ -148,6 +172,7 @@ async function discoverEntryPages(root, options) {
     }
     const dynamic = isDynamicPage(relativeFromPagesDir);
     const routePattern = toRoutePattern(relativeFromPagesDir, pageExtensions);
+    const paramDefinitions = extractRouteParamDefinitions(routePattern);
     return {
       id: entryPath,
       entryPath,
@@ -157,7 +182,8 @@ async function discoverEntryPages(root, options) {
       routePath: routePattern,
       fileName: "",
       dynamic,
-      paramNames: getParamNames(relativeFromPagesDir),
+      paramNames: paramDefinitions.map((p) => p.name),
+      paramDefinitions,
       params: {}
     };
   });
@@ -310,9 +336,14 @@ function installDevServer(args) {
         return next();
       }
       const html = await renderPage(page, mod, true);
+      const transformedHtml = await server.transformIndexHtml(
+        url,
+        html,
+        req.originalUrl
+      );
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.end(html);
+      res.end(transformedHtml);
     } catch (error) {
       server.config.logger.error(
         `[${PLUGIN_NAME}] dev server render failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
@@ -632,6 +663,39 @@ function validateHtmlAssetReferences(options) {
   }
 }
 
+// src/page-helper-generator.ts
+function paramsTypeFromDefinitions(paramDefinitions) {
+  if (paramDefinitions.length === 0) {
+    return "{}";
+  }
+  const fields = paramDefinitions.map((param) => {
+    if (param.type === "single") {
+      return `${JSON.stringify(param.name)}: string`;
+    }
+    if (param.type === "catch-all") {
+      return `${JSON.stringify(param.name)}: string[]`;
+    }
+    return `${JSON.stringify(param.name)}?: string[]`;
+  });
+  return `{ ${fields.join("; ")} }`;
+}
+function generateTypedPageHelper(page) {
+  const paramsType = page ? paramsTypeFromDefinitions(page.paramDefinitions ?? []) : "{}";
+  return `
+export type PageParams = ${paramsType};
+
+export type PageContext = {
+  params: PageParams;
+  data?: unknown;
+  dev: boolean;
+};
+
+export function definePage<T extends (ctx: PageContext) => any>(fn: T): T {
+  return fn;
+}
+`;
+}
+
 // src/plugin.ts
 import fs4 from "fs";
 import path7 from "path";
@@ -660,6 +724,7 @@ function htPages(options = {}) {
   let root = process.cwd();
   let server = null;
   let devPages = [];
+  let watcherAttached = false;
   const cleanUrls = options.cleanUrls ?? true;
   const pagesDir = options.pagesDir ?? "src";
   const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [".ht.js", ".html.js", ".ht.ts", ".html.ts"];
@@ -729,13 +794,25 @@ function htPages(options = {}) {
         }
       };
     },
-    resolveId(id) {
+    resolveId(id, importer) {
       if (id === VIRTUAL_BUILD_ENTRY_ID) return id;
+      if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
+        return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
+      }
       return null;
     },
-    load(id) {
+    async load(id) {
       if (id === VIRTUAL_BUILD_ENTRY_ID) {
         return "export default {};";
+      }
+      if (id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
+        const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
+        const { pages } = await buildPagesPipeline();
+        const normalizedImporter = path7.resolve(importer);
+        const page = pages.find(
+          (candidate) => path7.resolve(candidate.absolutePath) === normalizedImporter
+        );
+        return generateTypedPageHelper(page);
       }
       return null;
     },
@@ -779,21 +856,35 @@ function htPages(options = {}) {
         },
         getEntries: async () => discoverEntryPages(root, options)
       });
+      if (!watcherAttached) {
+        watcherAttached = true;
+        const reload = async (file) => {
+          if (!file.includes(`${path7.sep}src${path7.sep}`) && !file.includes("/src/")) {
+            return;
+          }
+          logDebug(options.debug, "file changed", file);
+          await loadDevPages();
+          server?.ws.send({ type: "full-reload" });
+        };
+        server.watcher.on("add", reload);
+        server.watcher.on("change", reload);
+        server.watcher.on("unlink", reload);
+      }
       loadDevPages().catch((error) => {
         server?.config.logger.error(
           `[${PLUGIN_NAME}] loadDevPages failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
         );
       });
     },
-    async handleHotUpdate(ctx) {
-      if (!server) return;
-      logDebug(options.debug, "file changed", ctx.file);
-      await loadDevPages();
-      server.ws.send({
-        type: "full-reload"
-      });
-      return [];
-    },
+    // async handleHotUpdate(ctx) {
+    //   if (!server) return;
+    //   logDebug(options.debug, 'file changed', ctx.file);
+    //   await loadDevPages();
+    //   server.ws.send({
+    //     type: 'full-reload',
+    //   });
+    //   return [];
+    // },
     async generateBundle(_, bundle) {
       try {
         const { modulesByEntry, pages } = await buildPagesPipeline();

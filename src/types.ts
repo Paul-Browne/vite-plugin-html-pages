@@ -4,6 +4,8 @@ export interface StaticParamRecord {
   [key: string]: string | number | boolean;
 }
 
+export type HtPageParams = Record<string, string | string[] | undefined>;
+
 export interface HtPageInfo {
   id: string;
   entryPath: string;
@@ -14,24 +16,32 @@ export interface HtPageInfo {
   fileName: string;
   dynamic: boolean;
   paramNames: string[];
-  params: Record<string, string>;
+  paramDefinitions: RouteParamDefinition[];
+  params: HtPageParams;
 }
 
-export interface HtPageRenderContext {
+export type HtPageRenderContext = {
   page: HtPageInfo;
-  params: Record<string, string>;
+  params: HtPageParams;
   data?: unknown;
   dev: boolean;
-}
+};
 
 export interface HtPageModule {
-  default?:
-    | string
-    | ((ctx: HtPageRenderContext) => string | Promise<string>);
-  data?: (ctx: HtPageRenderContext) => unknown | Promise<unknown>;
+  default?: ((ctx: {
+    page: HtPageInfo;
+    params: Record<string, string | string[] | undefined>;
+    data?: unknown;
+    dev: boolean;
+  }) => string | Promise<string>) | string;
+  data?: (ctx: {
+    page: HtPageInfo;
+    params: Record<string, string | string[] | undefined>;
+    dev: boolean;
+  }) => unknown | Promise<unknown>;
   generateStaticParams?: () =>
-    | StaticParamRecord[]
-    | Promise<StaticParamRecord[]>;
+    | Array<Record<string, string | number | boolean>>
+    | Promise<Array<Record<string, string | number | boolean>>>;
   dynamic?: boolean;
   prerender?: boolean;
 }
@@ -39,15 +49,13 @@ export interface HtPageModule {
 export interface HtPagesPluginOptions {
   root?: string;
   include?: string | string[];
-  exclude?: string | string[];
+  exclude?: string | string[];  
   pagesDir?: string;
   pageExtensions?: string[];
+  cleanUrls?: boolean;
+  debug?: boolean;
   renderConcurrency?: number;
   renderBatchSize?: number;
-  cleanUrls?: boolean;
-  ssrPlugins?: RollupPlugin[];
-  mapOutputPath?: (page: HtPageInfo) => string;
-  debug?: boolean;
   site?: string;
   missingAssets?: 'error' | 'warn';
   rss?: {
@@ -56,4 +64,10 @@ export interface HtPagesPluginOptions {
     description?: string;
     routePrefix?: string;
   };
+  mapOutputPath?: (page: HtPageInfo) => string;
 }
+
+export type RouteParamDefinition = {
+  name: string;
+  type: 'single' | 'catch-all' | 'optional-catch-all';
+};

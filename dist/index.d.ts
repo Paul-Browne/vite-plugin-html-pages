@@ -1,9 +1,9 @@
-import { Plugin as Plugin$1 } from 'vite';
-import { Plugin } from 'rollup';
+import { Plugin } from 'vite';
 
 interface StaticParamRecord {
     [key: string]: string | number | boolean;
 }
+type HtPageParams = Record<string, string | string[] | undefined>;
 interface HtPageInfo {
     id: string;
     entryPath: string;
@@ -14,18 +14,28 @@ interface HtPageInfo {
     fileName: string;
     dynamic: boolean;
     paramNames: string[];
-    params: Record<string, string>;
+    paramDefinitions: RouteParamDefinition[];
+    params: HtPageParams;
 }
-interface HtPageRenderContext {
+type HtPageRenderContext = {
     page: HtPageInfo;
-    params: Record<string, string>;
+    params: HtPageParams;
     data?: unknown;
     dev: boolean;
-}
+};
 interface HtPageModule {
-    default?: string | ((ctx: HtPageRenderContext) => string | Promise<string>);
-    data?: (ctx: HtPageRenderContext) => unknown | Promise<unknown>;
-    generateStaticParams?: () => StaticParamRecord[] | Promise<StaticParamRecord[]>;
+    default?: ((ctx: {
+        page: HtPageInfo;
+        params: Record<string, string | string[] | undefined>;
+        data?: unknown;
+        dev: boolean;
+    }) => string | Promise<string>) | string;
+    data?: (ctx: {
+        page: HtPageInfo;
+        params: Record<string, string | string[] | undefined>;
+        dev: boolean;
+    }) => unknown | Promise<unknown>;
+    generateStaticParams?: () => Array<Record<string, string | number | boolean>> | Promise<Array<Record<string, string | number | boolean>>>;
     dynamic?: boolean;
     prerender?: boolean;
 }
@@ -35,12 +45,10 @@ interface HtPagesPluginOptions {
     exclude?: string | string[];
     pagesDir?: string;
     pageExtensions?: string[];
+    cleanUrls?: boolean;
+    debug?: boolean;
     renderConcurrency?: number;
     renderBatchSize?: number;
-    cleanUrls?: boolean;
-    ssrPlugins?: Plugin[];
-    mapOutputPath?: (page: HtPageInfo) => string;
-    debug?: boolean;
     site?: string;
     missingAssets?: 'error' | 'warn';
     rss?: {
@@ -49,9 +57,14 @@ interface HtPagesPluginOptions {
         description?: string;
         routePrefix?: string;
     };
+    mapOutputPath?: (page: HtPageInfo) => string;
 }
+type RouteParamDefinition = {
+    name: string;
+    type: 'single' | 'catch-all' | 'optional-catch-all';
+};
 
-declare function htPages(options?: HtPagesPluginOptions): Plugin$1;
+declare function htPages(options?: HtPagesPluginOptions): Plugin;
 
 type FetchCacheMode = 'auto' | 'memory' | 'fs' | 'none';
 interface FetchWithCacheOptions {

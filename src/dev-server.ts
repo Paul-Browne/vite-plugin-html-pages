@@ -104,10 +104,15 @@ export function installDevServer(args: {
       }
 
       const html = await renderPage(page, mod, true);
-
+      const transformedHtml = await server.transformIndexHtml(
+        url,
+        html,
+        req.originalUrl,
+      );
+      
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.end(html);
+      res.end(transformedHtml);
     } catch (error) {
       server.config.logger.error(
         `[${PLUGIN_NAME}] dev server render failed: ${

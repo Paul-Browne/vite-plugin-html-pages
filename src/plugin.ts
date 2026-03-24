@@ -13,7 +13,13 @@ import {
 } from './static-assets';
 import { validateHtmlAssetReferences } from './html-asset-validator';
 import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
-import { PLUGIN_NAME, VIRTUAL_BUILD_ENTRY_ID } from './constants';
+import {
+  PLUGIN_NAME,
+  VIRTUAL_BUILD_ENTRY_ID,
+  VIRTUAL_PAGE_HELPER_ID,
+  RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX,
+} from './constants';
+import { generateTypedPageHelper } from './page-helper-generator';
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -50,6 +56,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   let root = process.cwd();
   let server: ViteDevServer | null = null;
   let devPages: HtPageInfo[] = [];
+  let watcherAttached = false;
 
   const cleanUrls = options.cleanUrls ?? true;
   const pagesDir = options.pagesDir ?? 'src';
@@ -141,15 +148,34 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       };
     },
 
-    resolveId(id) {
+    resolveId(id, importer) {
       if (id === VIRTUAL_BUILD_ENTRY_ID) return id;
+    
+      if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
+        return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
+      }
+    
       return null;
     },
 
-    load(id) {
+    async load(id) {
       if (id === VIRTUAL_BUILD_ENTRY_ID) {
         return 'export default {};';
       }
+    
+      if (id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
+        const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
+        const { pages } = await buildPagesPipeline();
+    
+        const normalizedImporter = path.resolve(importer);
+    
+        const page = pages.find(
+          (candidate) => path.resolve(candidate.absolutePath) === normalizedImporter,
+        );
+    
+        return generateTypedPageHelper(page);
+      }
+    
       return null;
     },
 
@@ -192,7 +218,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
     configureServer(_server) {
       server = _server;
-
+    
       installDevServer({
         server,
         getPages: async () => {
@@ -201,7 +227,28 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
         },
         getEntries: async () => discoverEntryPages(root, options),
       });
+    
+      if (!watcherAttached) {
+        watcherAttached = true;
+    
+        const reload = async (file: string) => {
+          if (!file.includes(`${path.sep}src${path.sep}`) && !file.includes('/src/')) {
+            return;
+          }
+    
+          logDebug(options.debug, 'file changed', file);
+    
+          await loadDevPages();
+    
+          server?.ws.send({ type: 'full-reload' });
 
+        };
+    
+        server.watcher.on('add', reload);
+        server.watcher.on('change', reload);
+        server.watcher.on('unlink', reload);
+      }
+    
       loadDevPages().catch((error) => {
         server?.config.logger.error(
           `[${PLUGIN_NAME}] loadDevPages failed: ${
@@ -211,19 +258,19 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       });
     },
 
-    async handleHotUpdate(ctx) {
-      if (!server) return;
+    // async handleHotUpdate(ctx) {
+    //   if (!server) return;
     
-      logDebug(options.debug, 'file changed', ctx.file);
+    //   logDebug(options.debug, 'file changed', ctx.file);
     
-      await loadDevPages();
+    //   await loadDevPages();
     
-      server.ws.send({
-        type: 'full-reload',
-      });
+    //   server.ws.send({
+    //     type: 'full-reload',
+    //   });
     
-      return [];
-    },
+    //   return [];
+    // },
 
     async generateBundle(_, bundle) {
       try {

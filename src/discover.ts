@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { normalizeFsPath, toPosix } from './path-utils';
-import { getParamNames, isDynamicPage, toRoutePattern } from './route-utils';
+import { isDynamicPage, toRoutePattern } from './route-utils';
+import { extractRouteParamDefinitions } from './route-params';
 import type { HtPageInfo, HtPagesPluginOptions } from './types';
 import { PLUGIN_NAME } from './constants';
 
@@ -64,6 +65,7 @@ export async function discoverEntryPages(
 
       const dynamic = isDynamicPage(relativeFromPagesDir);
       const routePattern = toRoutePattern(relativeFromPagesDir, pageExtensions);
+      const paramDefinitions = extractRouteParamDefinitions(routePattern);
 
       return {
         id: entryPath,
@@ -74,7 +76,8 @@ export async function discoverEntryPages(
         routePath: routePattern,
         fileName: '',
         dynamic,
-        paramNames: getParamNames(relativeFromPagesDir),
+        paramNames: paramDefinitions.map((p) => p.name),
+        paramDefinitions,
         params: {},
       } satisfies HtPageInfo;
     });
