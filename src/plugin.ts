@@ -180,8 +180,8 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
     },
 
     configResolved(resolved) {
-      root = resolved.root;
-
+      root = options.root ? path.resolve(resolved.root, options.root) : resolved.root;
+    
       if (!hasWarnedESM) {
         warnIfNotESM(root);
         hasWarnedESM = true;
@@ -221,6 +221,8 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
     
       installDevServer({
         server,
+        root,
+        pagesDir,
         getPages: async () => {
           if (devPages.length > 0) return devPages;
           return loadDevPages();

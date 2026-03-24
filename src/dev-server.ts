@@ -27,27 +27,30 @@ function isStaticAssetRequest(url: string): boolean {
   );
 }
 
-function shouldSkipHtmlRouting(url: string): boolean {
+function shouldSkipHtmlRouting(url: string, pagesDir: string): boolean {
   return (
     url.startsWith('/@vite') ||
     url.startsWith('/@fs/') ||
     url.startsWith('/node_modules/') ||
-    url.startsWith('/src/') ||
+    url.startsWith(`/${pagesDir}/`) ||
     url === '/favicon.ico' ||
     isStaticAssetRequest(url)
   );
 }
 
-function tryRewriteRootAssetToSrc(server: ViteDevServer, url: string): string | null {
+function tryRewriteRootAssetToSrc(
+  root: string,
+  pagesDir: string,
+  url: string,
+): string | null {
   if (!url.startsWith('/')) return null;
   if (!isStaticAssetRequest(url)) return null;
-  if (url.startsWith('/src/')) return null;
+  if (url.startsWith(`/${pagesDir}/`)) return null;
 
-  const root = server.config.root;
-  const candidate = path.join(root, 'src', url.slice(1));
+  const candidate = path.join(root, pagesDir, url.slice(1));
 
   if (fs.existsSync(candidate)) {
-    return `/src/${url.slice(1)}`;
+    return `/${pagesDir}/${url.slice(1)}`;
   }
 
   return null;
@@ -59,23 +62,25 @@ function shouldUseDynamicRendering(mod: HtPageModule): boolean {
 
 export function installDevServer(args: {
   server: ViteDevServer;
+  root: string;
+  pagesDir: string;
   getPages: () => Promise<HtPageInfo[]>;
   getEntries?: () => Promise<HtPageInfo[]>;
 }) {
-  const { server, getPages } = args;
+  const { server, root, pagesDir, getPages } = args;
 
   server.middlewares.use(async (req, res, next) => {
     try {
       const originalUrl = req.url ?? '/';
       const url = originalUrl.split('?')[0];
 
-      const rewrittenAssetUrl = tryRewriteRootAssetToSrc(server, url);
+      const rewrittenAssetUrl = tryRewriteRootAssetToSrc(root, pagesDir, url);
       if (rewrittenAssetUrl) {
         req.url = rewrittenAssetUrl + originalUrl.slice(url.length);
         return next();
       }
 
-      if (shouldSkipHtmlRouting(url)) {
+      if (shouldSkipHtmlRouting(url, pagesDir)) {
         return next();
       }
 
@@ -89,7 +94,7 @@ export function installDevServer(args: {
 
       const loadModule = await createPageModuleLoader({
         mode: 'dev',
-        root: server.config.root,
+        root,
         server,
       });
 

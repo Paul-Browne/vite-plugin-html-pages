@@ -287,17 +287,16 @@ async function closePageModuleLoader() {
 function isStaticAssetRequest(url) {
   return url.endsWith(".css") || url.endsWith(".js") || url.endsWith(".mjs") || url.endsWith(".ts") || url.endsWith(".png") || url.endsWith(".jpg") || url.endsWith(".jpeg") || url.endsWith(".gif") || url.endsWith(".svg") || url.endsWith(".webp") || url.endsWith(".ico") || url.endsWith(".woff") || url.endsWith(".woff2") || url.endsWith(".ttf") || url.endsWith(".otf");
 }
-function shouldSkipHtmlRouting(url) {
-  return url.startsWith("/@vite") || url.startsWith("/@fs/") || url.startsWith("/node_modules/") || url.startsWith("/src/") || url === "/favicon.ico" || isStaticAssetRequest(url);
+function shouldSkipHtmlRouting(url, pagesDir) {
+  return url.startsWith("/@vite") || url.startsWith("/@fs/") || url.startsWith("/node_modules/") || url.startsWith(`/${pagesDir}/`) || url === "/favicon.ico" || isStaticAssetRequest(url);
 }
-function tryRewriteRootAssetToSrc(server, url) {
+function tryRewriteRootAssetToSrc(root, pagesDir, url) {
   if (!url.startsWith("/")) return null;
   if (!isStaticAssetRequest(url)) return null;
-  if (url.startsWith("/src/")) return null;
-  const root = server.config.root;
-  const candidate = path4.join(root, "src", url.slice(1));
+  if (url.startsWith(`/${pagesDir}/`)) return null;
+  const candidate = path4.join(root, pagesDir, url.slice(1));
   if (fs.existsSync(candidate)) {
-    return `/src/${url.slice(1)}`;
+    return `/${pagesDir}/${url.slice(1)}`;
   }
   return null;
 }
@@ -305,17 +304,17 @@ function shouldUseDynamicRendering(mod) {
   return mod.dynamic === true || mod.prerender === false;
 }
 function installDevServer(args) {
-  const { server, getPages } = args;
+  const { server, root, pagesDir, getPages } = args;
   server.middlewares.use(async (req, res, next) => {
     try {
       const originalUrl = req.url ?? "/";
       const url = originalUrl.split("?")[0];
-      const rewrittenAssetUrl = tryRewriteRootAssetToSrc(server, url);
+      const rewrittenAssetUrl = tryRewriteRootAssetToSrc(root, pagesDir, url);
       if (rewrittenAssetUrl) {
         req.url = rewrittenAssetUrl + originalUrl.slice(url.length);
         return next();
       }
-      if (shouldSkipHtmlRouting(url)) {
+      if (shouldSkipHtmlRouting(url, pagesDir)) {
         return next();
       }
       const pages = await getPages();
@@ -325,7 +324,7 @@ function installDevServer(args) {
       }
       const loadModule = await createPageModuleLoader({
         mode: "dev",
-        root: server.config.root,
+        root,
         server
       });
       const mod = await loadModule(page.entryPath, page.relativePath);
@@ -817,7 +816,7 @@ function htPages(options = {}) {
       return null;
     },
     configResolved(resolved) {
-      root = resolved.root;
+      root = options.root ? path7.resolve(resolved.root, options.root) : resolved.root;
       if (!hasWarnedESM) {
         warnIfNotESM(root);
         hasWarnedESM = true;
@@ -850,6 +849,8 @@ function htPages(options = {}) {
       server = _server;
       installDevServer({
         server,
+        root,
+        pagesDir,
         getPages: async () => {
           if (devPages.length > 0) return devPages;
           return loadDevPages();
