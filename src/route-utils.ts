@@ -1,5 +1,10 @@
 import { normalizeRoutePath, stripPageSuffix, toPosix } from './path-utils';
-import type { HtPageInfo, StaticParamRecord } from './types';
+import type {
+  HtPageInfo,
+  HtPageParams,
+  StaticParamRecord,
+  StaticParamValue,
+} from './types';
 
 const DYNAMIC_SEGMENT_RE = /\[([A-Za-z0-9_]+)\]/g;
 const CATCH_ALL_SEGMENT_RE = /\[\.\.\.([A-Za-z0-9_]+)\]/g;
@@ -32,38 +37,77 @@ export function toRoutePattern(
   return normalizeRoutePath(raw || '/');
 }
 
+function encodePathParts(parts: string[]): string {
+  return parts.map((part) => encodeURIComponent(part)).join('/');
+}
+
+function normalizeCatchAllValue(value: StaticParamValue): string[] {
+  if (Array.isArray(value)) {
+    return value.map((part) => String(part)).filter(Boolean);
+  }
+
+  if (value === '') {
+    return [];
+  }
+
+  return String(value).split('/').filter(Boolean);
+}
+
+function normalizePageParams(params: StaticParamRecord): HtPageParams {
+  const normalized: HtPageParams = {};
+
+  for (const [key, value] of Object.entries(params)) {
+    normalized[key] = Array.isArray(value)
+      ? value.map((part) => String(part))
+      : String(value);
+  }
+
+  return normalized;
+}
+
 export function fillParams(
   pattern: string,
-  params: Record<string, string>,
+  params: StaticParamRecord,
 ): string {
   const result = pattern
     .replace(/\*\?:([A-Za-z0-9_]+)/g, (_, key) => {
       const value = params[key];
-      if (value == null || value === '') {
+      if (value == null) {
         return '';
       }
 
-      return String(value)
-        .split('/')
-        .map((part) => encodeURIComponent(part))
-        .join('/');
+      const parts = normalizeCatchAllValue(value);
+      if (parts.length === 0) {
+        return '';
+      }
+
+      return encodePathParts(parts);
     })
     .replace(/\*:([A-Za-z0-9_]+)/g, (_, key) => {
       if (!(key in params)) {
         throw new Error(`Missing catch-all route param "${key}"`);
       }
 
-      return String(params[key])
-        .split('/')
-        .map((part) => encodeURIComponent(part))
-        .join('/');
+      const value = params[key];
+      const parts = normalizeCatchAllValue(value);
+
+      if (parts.length === 0) {
+        throw new Error(`Catch-all route param "${key}" must not be empty`);
+      }
+
+      return encodePathParts(parts);
     })
     .replace(/:([A-Za-z0-9_]+)/g, (_, key) => {
       if (!(key in params)) {
         throw new Error(`Missing route param "${key}"`);
       }
 
-      return encodeURIComponent(params[key]);
+      const value = params[key];
+      if (Array.isArray(value)) {
+        throw new Error(`Route param "${key}" must be a string, received array`);
+      }
+
+      return encodeURIComponent(String(value));
     });
 
   return normalizeRoutePath(result || '/');
@@ -87,11 +131,8 @@ export function expandStaticPaths(
   cleanUrls: boolean,
 ): HtPageInfo[] {
   return rows.map((row) => {
-    const params = Object.fromEntries(
-      Object.entries(row).map(([k, v]) => [k, String(v)]),
-    );
-
-    const routePath = fillParams(basePage.routePattern, params);
+    const routePath = fillParams(basePage.routePattern, row);
+    const params = normalizePageParams(row);
 
     return {
       ...basePage,
@@ -105,18 +146,20 @@ export function expandStaticPaths(
 export function routeMatch(
   pattern: string,
   urlPath: string,
-): Record<string, string> | null {
+): HtPageParams | null {
   const a = normalizeRoutePath(pattern).split('/').filter(Boolean);
   const b = normalizeRoutePath(urlPath).split('/').filter(Boolean);
-  const params: Record<string, string> = {};
+  const params: HtPageParams = {};
 
   for (let i = 0; i < a.length; i++) {
     const patternSeg = a[i];
     const urlSeg = b[i];
 
     if (patternSeg.startsWith('*?:')) {
-      params[patternSeg.slice(3)] =
-        i < b.length ? b.slice(i).map(decodeURIComponent).join('/') : '';
+      const key = patternSeg.slice(3);
+      if (i < b.length) {
+        params[key] = b.slice(i).map(decodeURIComponent);
+      }
       return params;
     }
 
@@ -124,7 +167,7 @@ export function routeMatch(
       const rest = b.slice(i);
       if (rest.length === 0) return null;
 
-      params[patternSeg.slice(2)] = rest.map(decodeURIComponent).join('/');
+      params[patternSeg.slice(2)] = rest.map(decodeURIComponent);
       return params;
     }
 

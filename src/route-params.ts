@@ -3,23 +3,23 @@ import type { RouteParamDefinition } from './types';
 export function parseRouteParamSegment(
   segment: string,
 ): RouteParamDefinition | null {
-  if (segment.startsWith('[...') && segment.endsWith(']?')) {
+  if (segment.startsWith('*?:')) {
     return {
-      name: segment.slice(4, -2),
+      name: segment.slice(3),
       type: 'optional-catch-all',
     };
   }
 
-  if (segment.startsWith('[...') && segment.endsWith(']')) {
+  if (segment.startsWith('*:')) {
     return {
-      name: segment.slice(4, -1),
+      name: segment.slice(2),
       type: 'catch-all',
     };
   }
 
-  if (segment.startsWith('[') && segment.endsWith(']')) {
+  if (segment.startsWith(':')) {
     return {
-      name: segment.slice(1, -1),
+      name: segment.slice(1),
       type: 'single',
     };
   }

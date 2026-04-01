@@ -31,7 +31,8 @@ function normalizeFsPath(value) {
 function normalizeRoutePath(value) {
   const normalized = toPosix(value).replace(/\/+/g, "/");
   if (!normalized || normalized === "/") return "/";
-  return normalized.startsWith("/") ? normalized : `/${normalized}`;
+  const withLeadingSlash = normalized.startsWith("/") ? normalized : `/${normalized}`;
+  return withLeadingSlash !== "/" && withLeadingSlash.endsWith("/") ? withLeadingSlash.slice(0, -1) : withLeadingSlash;
 }
 function stripPageSuffix(filePath, extensions) {
   const normalized = toPosix(filePath);
@@ -55,23 +56,55 @@ function toRoutePattern(relativeFromPagesDir, extensions) {
   const raw = withoutIndex.replace(OPTIONAL_CATCH_ALL_SEGMENT_RE, "*?:$1").replace(CATCH_ALL_SEGMENT_RE, "*:$1").replace(DYNAMIC_SEGMENT_RE, ":$1");
   return normalizeRoutePath(raw || "/");
 }
+function encodePathParts(parts) {
+  return parts.map((part) => encodeURIComponent(part)).join("/");
+}
+function normalizeCatchAllValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((part) => String(part)).filter(Boolean);
+  }
+  if (value === "") {
+    return [];
+  }
+  return String(value).split("/").filter(Boolean);
+}
+function normalizePageParams(params) {
+  const normalized = {};
+  for (const [key, value] of Object.entries(params)) {
+    normalized[key] = Array.isArray(value) ? value.map((part) => String(part)) : String(value);
+  }
+  return normalized;
+}
 function fillParams(pattern, params) {
   const result = pattern.replace(/\*\?:([A-Za-z0-9_]+)/g, (_, key) => {
     const value = params[key];
-    if (value == null || value === "") {
+    if (value == null) {
       return "";
     }
-    return String(value).split("/").map((part) => encodeURIComponent(part)).join("/");
+    const parts = normalizeCatchAllValue(value);
+    if (parts.length === 0) {
+      return "";
+    }
+    return encodePathParts(parts);
   }).replace(/\*:([A-Za-z0-9_]+)/g, (_, key) => {
     if (!(key in params)) {
       throw new Error(`Missing catch-all route param "${key}"`);
     }
-    return String(params[key]).split("/").map((part) => encodeURIComponent(part)).join("/");
+    const value = params[key];
+    const parts = normalizeCatchAllValue(value);
+    if (parts.length === 0) {
+      throw new Error(`Catch-all route param "${key}" must not be empty`);
+    }
+    return encodePathParts(parts);
   }).replace(/:([A-Za-z0-9_]+)/g, (_, key) => {
     if (!(key in params)) {
       throw new Error(`Missing route param "${key}"`);
     }
-    return encodeURIComponent(params[key]);
+    const value = params[key];
+    if (Array.isArray(value)) {
+      throw new Error(`Route param "${key}" must be a string, received array`);
+    }
+    return encodeURIComponent(String(value));
   });
   return normalizeRoutePath(result || "/");
 }
@@ -83,10 +116,8 @@ function fileNameFromRoute(routePath, cleanUrls) {
 }
 function expandStaticPaths(basePage, rows, cleanUrls) {
   return rows.map((row) => {
-    const params = Object.fromEntries(
-      Object.entries(row).map(([k, v]) => [k, String(v)])
-    );
-    const routePath = fillParams(basePage.routePattern, params);
+    const routePath = fillParams(basePage.routePattern, row);
+    const params = normalizePageParams(row);
     return {
       ...basePage,
       routePath,
@@ -125,21 +156,21 @@ function compareRoutePriority(a, b) {
 
 // src/route-params.ts
 function parseRouteParamSegment(segment) {
-  if (segment.startsWith("[...") && segment.endsWith("]?")) {
+  if (segment.startsWith("*?:")) {
     return {
-      name: segment.slice(4, -2),
+      name: segment.slice(3),
       type: "optional-catch-all"
     };
   }
-  if (segment.startsWith("[...") && segment.endsWith("]")) {
+  if (segment.startsWith("*:")) {
     return {
-      name: segment.slice(4, -1),
+      name: segment.slice(2),
       type: "catch-all"
     };
   }
-  if (segment.startsWith("[") && segment.endsWith("]")) {
+  if (segment.startsWith(":")) {
     return {
-      name: segment.slice(1, -1),
+      name: segment.slice(1),
       type: "single"
     };
   }
@@ -569,7 +600,8 @@ async function buildPageIndex(args) {
             relativePath: entry.relativePath,
             routePattern: entry.routePattern,
             dynamic: entry.dynamic,
-            paramNames: entry.paramNames
+            paramNames: entry.paramNames,
+            paramDefinitions: entry.paramDefinitions
           },
           Array.isArray(rows) ? rows : [],
           cleanUrls

@@ -3,8 +3,9 @@ import {
   expandStaticPaths,
   fileNameFromRoute,
 } from './route-utils';
-import type { HtPageInfo, HtPageModule, StaticParamRecord } from './types';
+import type { HtPageInfo, HtPageModule } from './types';
 import { PLUGIN_NAME } from './constants';
+
 export async function buildPageIndex(args: {
   entries: HtPageInfo[];
   modulesByEntry: Map<string, HtPageModule>;
@@ -32,7 +33,8 @@ export async function buildPageIndex(args: {
             routePattern: entry.routePattern,
             dynamic: entry.dynamic,
             paramNames: entry.paramNames,
-          } as Omit<HtPageInfo, 'routePath' | 'fileName' | 'params'>,
+            paramDefinitions: entry.paramDefinitions,
+          },
           Array.isArray(rows) ? rows : [],
           cleanUrls,
         ),

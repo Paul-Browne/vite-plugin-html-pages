@@ -1,9 +1,12 @@
 import { Plugin } from 'vite';
 
+type StaticParamPrimitive = string | number | boolean;
+type StaticParamValue = StaticParamPrimitive | StaticParamPrimitive[];
 interface StaticParamRecord {
-    [key: string]: string | number | boolean;
+    [key: string]: StaticParamValue;
 }
-type HtPageParams = Record<string, string | string[] | undefined>;
+type HtPageParamValue = string | string[] | undefined;
+type HtPageParams = Record<string, HtPageParamValue>;
 interface HtPageInfo {
     id: string;
     entryPath: string;
@@ -26,16 +29,16 @@ type HtPageRenderContext = {
 interface HtPageModule {
     default?: ((ctx: {
         page: HtPageInfo;
-        params: Record<string, string | string[] | undefined>;
+        params: HtPageParams;
         data?: unknown;
         dev: boolean;
     }) => string | Promise<string>) | string;
     data?: (ctx: {
         page: HtPageInfo;
-        params: Record<string, string | string[] | undefined>;
+        params: HtPageParams;
         dev: boolean;
     }) => unknown | Promise<unknown>;
-    generateStaticParams?: () => Array<Record<string, string | number | boolean>> | Promise<Array<Record<string, string | number | boolean>>>;
+    generateStaticParams?: () => Array<StaticParamRecord> | Promise<Array<StaticParamRecord>>;
     dynamic?: boolean;
     prerender?: boolean;
 }

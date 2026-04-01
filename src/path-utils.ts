@@ -11,7 +11,14 @@ export function normalizeFsPath(value: string): string {
 export function normalizeRoutePath(value: string): string {
   const normalized = toPosix(value).replace(/\/+/g, '/');
   if (!normalized || normalized === '/') return '/';
-  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+
+  const withLeadingSlash = normalized.startsWith('/')
+    ? normalized
+    : `/${normalized}`;
+
+  return withLeadingSlash !== '/' && withLeadingSlash.endsWith('/')
+    ? withLeadingSlash.slice(0, -1)
+    : withLeadingSlash;
 }
 
 export function stripPageSuffix(
