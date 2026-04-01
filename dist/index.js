@@ -110,6 +110,50 @@ function getTypesFileName(page) {
   });
   return `$types.${parts.join(".")}.d.ts`;
 }
+async function listFilesRecursive(dir) {
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    const err = error;
+    if (err.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+  const files = await Promise.all(
+    entries.map(async (entry) => {
+      const fullPath = path2.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        return listFilesRecursive(fullPath);
+      }
+      return [fullPath];
+    })
+  );
+  return files.flat();
+}
+async function removeEmptyDirectories(dir, stopAt) {
+  const normalizedDir = normalizeFsPath(dir);
+  const normalizedStopAt = normalizeFsPath(stopAt);
+  if (normalizedDir === normalizedStopAt) {
+    return;
+  }
+  let entries;
+  try {
+    entries = await fs.readdir(normalizedDir);
+  } catch (error) {
+    const err = error;
+    if (err.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  if (entries.length > 0) {
+    return;
+  }
+  await fs.rmdir(normalizedDir);
+  await removeEmptyDirectories(path2.dirname(normalizedDir), normalizedStopAt);
+}
 function getGeneratedTypesRoot(root) {
   return normalizeFsPath(path2.join(root, ".vite-plugin-html-pages", "types"));
 }
@@ -125,20 +169,46 @@ function getGeneratedHelperPath(args) {
     path2.join(outRoot, path2.dirname(withoutExt), fileName)
   );
 }
+async function removeStalePageTypeDeclarations(args) {
+  const outRoot = getGeneratedTypesRoot(args.root);
+  const existingFiles = await listFilesRecursive(outRoot);
+  const staleFiles = existingFiles.filter((file) => {
+    if (!file.endsWith(".d.ts")) {
+      return false;
+    }
+    return !args.expectedFiles.has(normalizeFsPath(file));
+  });
+  await Promise.all(
+    staleFiles.map(async (file) => {
+      await fs.unlink(file);
+      await removeEmptyDirectories(path2.dirname(file), outRoot);
+    })
+  );
+}
 async function writePageTypeDeclarations(args) {
   const outRoot = getGeneratedTypesRoot(args.root);
   await fs.mkdir(outRoot, { recursive: true });
+  const outputs = args.entries.map((page) => ({
+    page,
+    outFile: getGeneratedHelperPath({
+      root: args.root,
+      pagesDir: args.pagesDir,
+      page
+    })
+  }));
+  const expectedFiles = new Set(
+    outputs.map(({ outFile }) => normalizeFsPath(outFile))
+  );
   await Promise.all(
-    args.entries.map(async (page) => {
-      const outFile = getGeneratedHelperPath({
-        root: args.root,
-        pagesDir: args.pagesDir,
-        page
-      });
+    outputs.map(async ({ page, outFile }) => {
       await fs.mkdir(path2.dirname(outFile), { recursive: true });
       await fs.writeFile(outFile, pageHelperModuleSource(page), "utf8");
     })
   );
+  await removeStalePageTypeDeclarations({
+    root: args.root,
+    expectedFiles
+  });
 }
 
 // src/constants.ts
