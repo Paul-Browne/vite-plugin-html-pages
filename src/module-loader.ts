@@ -6,7 +6,11 @@ import {
   RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX,
 } from './constants';
 import { generateTypedPageHelper } from './page-helper-generator';
-import type { HtPageInfo, HtPageModule } from './types';
+import type {
+  HtPageInfo,
+  HtPageModule,
+  HtStructuredPageModule,
+} from './types';
 
 export type PageModuleLoader = (
   entryPath: string,
@@ -14,6 +18,35 @@ export type PageModuleLoader = (
 ) => Promise<HtPageModule>;
 
 let buildServer: ViteDevServer | null = null;
+
+function isStructuredPageModule(
+  value: unknown,
+): value is HtStructuredPageModule {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    'render' in value &&
+    typeof (value as { render?: unknown }).render === 'function'
+  );
+}
+
+function normalizeLoadedPageModule(mod: unknown): HtPageModule {
+  const pageModule = (mod ?? {}) as HtPageModule;
+
+  if (isStructuredPageModule(pageModule.default)) {
+    const structured = pageModule.default;
+
+    return {
+      default: structured.render,
+      data: structured.data,
+      generateStaticParams: structured.generateStaticParams,
+      dynamic: structured.dynamic,
+      prerender: structured.prerender,
+    };
+  }
+
+  return pageModule;
+}
 
 export async function createPageModuleLoader(args: {
   mode: 'dev' | 'build';
@@ -30,7 +63,7 @@ export async function createPageModuleLoader(args: {
 
     return async (_entryPath, relativePath) => {
       const mod = await server.ssrLoadModule(`/${relativePath}`);
-      return mod as HtPageModule;
+      return normalizeLoadedPageModule(mod);
     };
   }
 
@@ -96,7 +129,7 @@ export async function createPageModuleLoader(args: {
       '/' + path.relative(root, entryPath).replace(/\\/g, '/');
 
     const mod = await buildServer!.ssrLoadModule(relativePath);
-    return mod as HtPageModule;
+    return normalizeLoadedPageModule(mod);
   };
 }
 

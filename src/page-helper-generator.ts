@@ -30,14 +30,55 @@ export function generateTypedPageHelper(page: HtPageInfo | undefined): string {
   return `
 export type PageParams = ${paramsType};
 
-export type PageContext = {
+export type StaticParams = PageParams[];
+
+export type DataContext = {
   params: PageParams;
-  data?: unknown;
   dev: boolean;
 };
 
+export type RenderContext<TData = unknown> = {
+  params: PageParams;
+  data: TData;
+  dev: boolean;
+};
+
+export type PageContext<TData = unknown> = {
+  params: PageParams;
+  data?: TData;
+  dev: boolean;
+};
+
+export type PageModule<TData = unknown> = {
+  generateStaticParams?: () => StaticParams | Promise<StaticParams>;
+  data?: (ctx: DataContext) => TData | Promise<TData>;
+  render: (ctx: RenderContext<TData>) => any;
+};
+
+export function definePageModule<TData>(
+  mod: PageModule<TData>,
+): PageModule<TData> {
+  return mod;
+}
+
 export function definePage<T extends (ctx: PageContext) => any>(fn: T): T {
   return fn;
+}
+
+export function defineData<T extends (ctx: DataContext) => any>(fn: T): T {
+  return fn;
+}
+
+export function defineStaticParams<
+  T extends () => StaticParams | Promise<StaticParams>
+>(fn: T): T {
+  return fn;
+}
+
+export function definePageModule<TData>(
+  mod: PageModule<TData>,
+): PageModule<TData> {
+  return mod;
 }
 `;
 }

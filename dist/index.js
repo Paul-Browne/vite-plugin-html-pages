@@ -307,20 +307,78 @@ function generateTypedPageHelper(page) {
   return `
 export type PageParams = ${paramsType};
 
-export type PageContext = {
+export type StaticParams = PageParams[];
+
+export type DataContext = {
   params: PageParams;
-  data?: unknown;
   dev: boolean;
 };
 
+export type RenderContext<TData = unknown> = {
+  params: PageParams;
+  data: TData;
+  dev: boolean;
+};
+
+export type PageContext<TData = unknown> = {
+  params: PageParams;
+  data?: TData;
+  dev: boolean;
+};
+
+export type PageModule<TData = unknown> = {
+  generateStaticParams?: () => StaticParams | Promise<StaticParams>;
+  data?: (ctx: DataContext) => TData | Promise<TData>;
+  render: (ctx: RenderContext<TData>) => any;
+};
+
+export function definePageModule<TData>(
+  mod: PageModule<TData>,
+): PageModule<TData> {
+  return mod;
+}
+
 export function definePage<T extends (ctx: PageContext) => any>(fn: T): T {
   return fn;
+}
+
+export function defineData<T extends (ctx: DataContext) => any>(fn: T): T {
+  return fn;
+}
+
+export function defineStaticParams<
+  T extends () => StaticParams | Promise<StaticParams>
+>(fn: T): T {
+  return fn;
+}
+
+export function definePageModule<TData>(
+  mod: PageModule<TData>,
+): PageModule<TData> {
+  return mod;
 }
 `;
 }
 
 // src/module-loader.ts
 var buildServer = null;
+function isStructuredPageModule(value) {
+  return !!value && typeof value === "object" && "render" in value && typeof value.render === "function";
+}
+function normalizeLoadedPageModule(mod) {
+  const pageModule = mod ?? {};
+  if (isStructuredPageModule(pageModule.default)) {
+    const structured = pageModule.default;
+    return {
+      default: structured.render,
+      data: structured.data,
+      generateStaticParams: structured.generateStaticParams,
+      dynamic: structured.dynamic,
+      prerender: structured.prerender
+    };
+  }
+  return pageModule;
+}
 async function createPageModuleLoader(args) {
   const { mode, root, server, getPages } = args;
   if (mode === "dev") {
@@ -329,7 +387,7 @@ async function createPageModuleLoader(args) {
     }
     return async (_entryPath, relativePath) => {
       const mod = await server.ssrLoadModule(`/${relativePath}`);
-      return mod;
+      return normalizeLoadedPageModule(mod);
     };
   }
   if (!getPages) {
@@ -381,7 +439,7 @@ async function createPageModuleLoader(args) {
   return async (entryPath) => {
     const relativePath = "/" + path3.relative(root, entryPath).replace(/\\/g, "/");
     const mod = await buildServer.ssrLoadModule(relativePath);
-    return mod;
+    return normalizeLoadedPageModule(mod);
   };
 }
 async function closePageModuleLoader() {

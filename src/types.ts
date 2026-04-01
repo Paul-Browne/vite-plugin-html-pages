@@ -29,6 +29,25 @@ export type HtPageRenderContext = {
   dev: boolean;
 };
 
+export interface HtStructuredPageModule<TData = unknown> {
+  render: (ctx: {
+    page: HtPageInfo;
+    params: HtPageParams;
+    data?: TData;
+    dev: boolean;
+  }) => string | Promise<string>;
+  data?: (ctx: {
+    page: HtPageInfo;
+    params: HtPageParams;
+    dev: boolean;
+  }) => TData | Promise<TData>;
+  generateStaticParams?: () =>
+    | Array<StaticParamRecord>
+    | Promise<Array<StaticParamRecord>>;
+  dynamic?: boolean;
+  prerender?: boolean;
+}
+
 export interface HtPageModule {
   default?:
     | ((ctx: {
@@ -37,18 +56,16 @@ export interface HtPageModule {
         data?: unknown;
         dev: boolean;
       }) => string | Promise<string>)
-    | string;
-
+    | string
+    | HtStructuredPageModule;
   data?: (ctx: {
     page: HtPageInfo;
     params: HtPageParams;
     dev: boolean;
   }) => unknown | Promise<unknown>;
-
   generateStaticParams?: () =>
     | Array<StaticParamRecord>
     | Promise<Array<StaticParamRecord>>;
-
   dynamic?: boolean;
   prerender?: boolean;
 }
