@@ -4,6 +4,7 @@ import { createServer, type InlineConfig, type ViteDevServer } from 'vite';
 import {
   VIRTUAL_PAGE_HELPER_ID,
   RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX,
+  VIRTUAL_LOCAL_TYPES_PREFIX,
 } from './constants';
 import { generateTypedPageHelper } from './page-helper-generator';
 import type {
@@ -28,6 +29,10 @@ function isStructuredPageModule(
     'render' in value &&
     typeof (value as { render?: unknown }).render === 'function'
   );
+}
+
+function isLocalPageTypesImport(id: string): boolean {
+  return /^\.\/\$types(?:\.[A-Za-z0-9_.-]+)?$/.test(id);
 }
 
 function normalizeLoadedPageModule(mod: unknown): HtPageModule {
@@ -95,10 +100,25 @@ export async function createPageModuleLoader(args: {
               return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
             }
 
+            if (importer && isLocalPageTypesImport(id)) {
+              return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
+            }
+
             return null;
           },
 
           async load(id) {
+            if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {
+              return `
+export {
+  definePage,
+  defineData,
+  defineStaticParams,
+  definePageModule
+} from 'vite-plugin-html-pages/page';
+`;
+            }
+
             if (!id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
               return null;
             }

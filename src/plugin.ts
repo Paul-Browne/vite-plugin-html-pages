@@ -6,6 +6,8 @@ import { transform as esbuildTransform } from 'esbuild';
 import pLimit from 'p-limit';
 import type { Plugin, ViteDevServer } from 'vite';
 
+import { writePageTypeDeclarations } from './typegen';
+
 import {
   PLUGIN_NAME,
   VIRTUAL_BUILD_ENTRY_ID,
@@ -15,6 +17,7 @@ import {
   VIRTUAL_JSX_DEV_RUNTIME_ID,
   RESOLVED_VIRTUAL_JSX_RUNTIME_ID,
   RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID,
+  VIRTUAL_LOCAL_TYPES_PREFIX,
 } from './constants';
 import { discoverEntryPages } from './discover';
 import { installDevServer } from './dev-server';
@@ -50,6 +53,10 @@ function warnIfNotESM(root: string) {
   } catch {
     // silent — never break build
   }
+}
+
+function isLocalPageTypesImport(id: string): boolean {
+  return /^\.\/\$types(?:\.[A-Za-z0-9_.-]+)?$/.test(id);
 }
 
 function chunkArray<T>(items: T[], size: number): T[][] {
@@ -109,6 +116,14 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
   async function loadDevPages(): Promise<HtPageInfo[]> {
     const entries = await discoverEntryPages(root, options);
+  
+    // 🔥 generate types for editor
+    await writePageTypeDeclarations({
+      root,
+      pagesDir,
+      entries,
+    });
+  
     const modulesByEntry = new Map<string, HtPageModule>();
 
     logDebug(
@@ -147,6 +162,14 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
   async function buildPagesPipeline() {
     const entries = await discoverEntryPages(root, options);
+  
+    // 🔥 generate types for build (also ensures fresh output)
+    await writePageTypeDeclarations({
+      root,
+      pagesDir,
+      entries,
+    });
+  
     const modulesByEntry = new Map<string, HtPageModule>();
 
     const loadModule = await createPageModuleLoader({
@@ -214,6 +237,10 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
         }
       }
 
+      if (importer && isLocalPageTypesImport(id)) {
+        return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
+      }      
+
       return null;
     },
 
@@ -251,6 +278,17 @@ export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
 
         return generateTypedPageHelper(page);
       }
+
+      if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {
+        return `
+export {
+  definePage,
+  defineData,
+  defineStaticParams,
+  definePageModule
+} from 'vite-plugin-html-pages/page';
+`;
+      }        
 
       return null;
     },

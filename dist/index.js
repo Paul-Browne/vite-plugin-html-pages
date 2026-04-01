@@ -1,23 +1,12 @@
 // src/plugin.ts
-import fs4 from "fs";
-import path7 from "path";
+import fs5 from "fs";
+import path8 from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { transform as esbuildTransform } from "esbuild";
 import pLimit from "p-limit";
 
-// src/constants.ts
-var PLUGIN_NAME = "vite-plugin-html-pages";
-var VIRTUAL_BUILD_ENTRY_ID = `\0${PLUGIN_NAME}:build-entry`;
-var VIRTUAL_PAGE_HELPER_ID = `${PLUGIN_NAME}/page`;
-var RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX = `\0${PLUGIN_NAME}/page:`;
-var VIRTUAL_MANIFEST_ID = `\0virtual:${PLUGIN_NAME}-manifest`;
-var CACHE_DIR_NAME = `node_modules/.cache/${PLUGIN_NAME}`;
-var VIRTUAL_JSX_RUNTIME_ID = `${PLUGIN_NAME}/jsx-runtime`;
-var VIRTUAL_JSX_DEV_RUNTIME_ID = `${PLUGIN_NAME}/jsx-dev-runtime`;
-var RESOLVED_VIRTUAL_JSX_RUNTIME_ID = `\0${VIRTUAL_JSX_RUNTIME_ID}`;
-var RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID = `\0${VIRTUAL_JSX_DEV_RUNTIME_ID}`;
-
-// src/discover.ts
+// src/typegen.ts
+import fs from "fs/promises";
 import path2 from "path";
 
 // src/path-utils.ts
@@ -40,6 +29,126 @@ function stripPageSuffix(filePath, extensions) {
   if (!match) return normalized;
   return normalized.slice(0, -match.length);
 }
+
+// src/typegen.ts
+function paramsTypeFromDefinitions(paramDefinitions) {
+  if (paramDefinitions.length === 0) {
+    return "{}";
+  }
+  const fields = paramDefinitions.map((param) => {
+    if (param.type === "single") {
+      return `${JSON.stringify(param.name)}: string`;
+    }
+    if (param.type === "catch-all") {
+      return `${JSON.stringify(param.name)}: string[]`;
+    }
+    return `${JSON.stringify(param.name)}?: string[]`;
+  });
+  return `{ ${fields.join("; ")} }`;
+}
+function pageHelperModuleSource(page) {
+  const paramsType = paramsTypeFromDefinitions(page.paramDefinitions ?? []);
+  return `export type PageParams = ${paramsType};
+
+export type StaticParams = PageParams[];
+
+export type DataContext = {
+  params: PageParams;
+  dev: boolean;
+};
+
+export type RenderContext<TData = unknown> = {
+  params: PageParams;
+  data: TData;
+  dev: boolean;
+};
+
+export type PageContext<TData = unknown> = {
+  params: PageParams;
+  data?: TData;
+  dev: boolean;
+};
+
+export type PageModule<TData = unknown> = {
+  generateStaticParams?: () => StaticParams | Promise<StaticParams>;
+  data?: (ctx: DataContext) => TData | Promise<TData>;
+  render: (ctx: RenderContext<TData>) => any;
+};
+
+export declare function definePage<T extends (ctx: PageContext) => any>(fn: T): T;
+export declare function defineData<T extends (ctx: DataContext) => any>(fn: T): T;
+export declare function defineStaticParams<
+  T extends () => StaticParams | Promise<StaticParams>
+>(fn: T): T;
+export declare function definePageModule<TData>(
+  mod: PageModule<TData>
+): PageModule<TData>;
+`;
+}
+function stripPageExtension(filePath) {
+  return filePath.replace(/\.(ht|html)\.(js|ts|jsx|tsx)$/i, "");
+}
+function getTypesFileName(page) {
+  if (!page.dynamic || page.paramDefinitions.length === 0) {
+    return "$types.d.ts";
+  }
+  const parts = page.paramDefinitions.map((param) => {
+    if (param.type === "single") {
+      return param.name;
+    }
+    if (param.type === "catch-all") {
+      return `${param.name}.all`;
+    }
+    return `${param.name}.opt`;
+  });
+  return `$types.${parts.join(".")}.d.ts`;
+}
+function getGeneratedTypesRoot(root) {
+  return normalizeFsPath(path2.join(root, ".vite-plugin-html-pages", "types"));
+}
+function getGeneratedHelperPath(args) {
+  const pagesRoot = normalizeFsPath(path2.join(args.root, args.pagesDir));
+  const relativeFromPagesDir = toPosix(
+    path2.relative(pagesRoot, args.page.absolutePath)
+  );
+  const withoutExt = stripPageExtension(relativeFromPagesDir);
+  const outRoot = getGeneratedTypesRoot(args.root);
+  const fileName = getTypesFileName(args.page);
+  return normalizeFsPath(
+    path2.join(outRoot, path2.dirname(withoutExt), fileName)
+  );
+}
+async function writePageTypeDeclarations(args) {
+  const outRoot = getGeneratedTypesRoot(args.root);
+  await fs.mkdir(outRoot, { recursive: true });
+  await Promise.all(
+    args.entries.map(async (page) => {
+      const outFile = getGeneratedHelperPath({
+        root: args.root,
+        pagesDir: args.pagesDir,
+        page
+      });
+      await fs.mkdir(path2.dirname(outFile), { recursive: true });
+      await fs.writeFile(outFile, pageHelperModuleSource(page), "utf8");
+    })
+  );
+}
+
+// src/constants.ts
+var PLUGIN_NAME = "vite-plugin-html-pages";
+var VIRTUAL_BUILD_ENTRY_ID = `\0${PLUGIN_NAME}:build-entry`;
+var VIRTUAL_PAGE_HELPER_ID = `${PLUGIN_NAME}/page`;
+var RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX = `\0${PLUGIN_NAME}/page:`;
+var VIRTUAL_MANIFEST_ID = `\0virtual:${PLUGIN_NAME}-manifest`;
+var CACHE_DIR_NAME = `node_modules/.cache/${PLUGIN_NAME}`;
+var VIRTUAL_JSX_RUNTIME_ID = `${PLUGIN_NAME}/jsx-runtime`;
+var VIRTUAL_JSX_DEV_RUNTIME_ID = `${PLUGIN_NAME}/jsx-dev-runtime`;
+var RESOLVED_VIRTUAL_JSX_RUNTIME_ID = `\0${VIRTUAL_JSX_RUNTIME_ID}`;
+var RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID = `\0${VIRTUAL_JSX_DEV_RUNTIME_ID}`;
+var VIRTUAL_LOCAL_TYPES_PREFIX = `\0${PLUGIN_NAME}:local-types:`;
+
+// src/discover.ts
+import path3 from "path";
 
 // src/route-utils.ts
 var DYNAMIC_SEGMENT_RE = /\[([A-Za-z0-9_]+)\]/g;
@@ -194,7 +303,7 @@ async function discoverEntryPages(root, options) {
   const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [".ht.js", ".html.js", ".ht.ts", ".html.ts", ".ht.jsx", ".html.jsx", ".ht.tsx", ".html.tsx"];
   const include = Array.isArray(options.include) ? options.include : options.include ? [options.include] : buildDefaultIncludeGlobs(pagesDir, pageExtensions);
   const exclude = Array.isArray(options.exclude) ? options.exclude : options.exclude ? [options.exclude] : [];
-  const pagesRoot = normalizeFsPath(path2.join(root, pagesDir));
+  const pagesRoot = normalizeFsPath(path3.join(root, pagesDir));
   const files = await fg2.glob(include, {
     cwd: root,
     ignore: exclude,
@@ -202,8 +311,8 @@ async function discoverEntryPages(root, options) {
   });
   return files.sort().map((absolutePath) => {
     const entryPath = normalizeFsPath(absolutePath);
-    const relativePath = toPosix(path2.relative(root, entryPath));
-    const relativeFromPagesDir = toPosix(path2.relative(pagesRoot, entryPath));
+    const relativePath = toPosix(path3.relative(root, entryPath));
+    const relativeFromPagesDir = toPosix(path3.relative(pagesRoot, entryPath));
     if (relativeFromPagesDir.startsWith("../") || relativeFromPagesDir === "..") {
       throw new Error(
         `[${PLUGIN_NAME}] Page is outside pagesDir: ${entryPath} (pagesDir: ${pagesDir})`
@@ -229,8 +338,8 @@ async function discoverEntryPages(root, options) {
 }
 
 // src/dev-server.ts
-import fs from "fs";
-import path4 from "path";
+import fs2 from "fs";
+import path5 from "path";
 
 // src/errors.ts
 function invalidHtmlReturn(page, value) {
@@ -283,11 +392,11 @@ async function renderPage(page, mod, dev = false) {
 }
 
 // src/module-loader.ts
-import path3 from "path";
+import path4 from "path";
 import { createServer } from "vite";
 
 // src/page-helper-generator.ts
-function paramsTypeFromDefinitions(paramDefinitions) {
+function paramsTypeFromDefinitions2(paramDefinitions) {
   if (paramDefinitions.length === 0) {
     return "{}";
   }
@@ -303,7 +412,7 @@ function paramsTypeFromDefinitions(paramDefinitions) {
   return `{ ${fields.join("; ")} }`;
 }
 function generateTypedPageHelper(page) {
-  const paramsType = page ? paramsTypeFromDefinitions(page.paramDefinitions ?? []) : "{}";
+  const paramsType = page ? paramsTypeFromDefinitions2(page.paramDefinitions ?? []) : "{}";
   return `
 export type PageParams = ${paramsType};
 
@@ -359,6 +468,9 @@ var buildServer = null;
 function isStructuredPageModule(value) {
   return !!value && typeof value === "object" && "render" in value && typeof value.render === "function";
 }
+function isLocalPageTypesImport(id) {
+  return /^\.\/\$types(?:\.[A-Za-z0-9_.-]+)?$/.test(id);
+}
 function normalizeLoadedPageModule(mod) {
   const pageModule = mod ?? {};
   if (isStructuredPageModule(pageModule.default)) {
@@ -409,9 +521,22 @@ async function createPageModuleLoader(args) {
             if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
               return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
             }
+            if (importer && isLocalPageTypesImport(id)) {
+              return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
+            }
             return null;
           },
           async load(id) {
+            if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {
+              return `
+export {
+  definePage,
+  defineData,
+  defineStaticParams,
+  definePageModule
+} from 'vite-plugin-html-pages/page';
+`;
+            }
             if (!id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
               return null;
             }
@@ -419,9 +544,9 @@ async function createPageModuleLoader(args) {
               RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length
             );
             const pages = await getPages();
-            const normalizedImporter = path3.resolve(importer);
+            const normalizedImporter = path4.resolve(importer);
             const page = pages.find(
-              (candidate) => path3.resolve(candidate.absolutePath) === normalizedImporter
+              (candidate) => path4.resolve(candidate.absolutePath) === normalizedImporter
             );
             return generateTypedPageHelper(page);
           }
@@ -431,7 +556,7 @@ async function createPageModuleLoader(args) {
     buildServer = await createServer(config);
   }
   return async (entryPath) => {
-    const relativePath = "/" + path3.relative(root, entryPath).replace(/\\/g, "/");
+    const relativePath = "/" + path4.relative(root, entryPath).replace(/\\/g, "/");
     const mod = await buildServer.ssrLoadModule(relativePath);
     return normalizeLoadedPageModule(mod);
   };
@@ -454,8 +579,8 @@ function tryRewriteRootAssetToSrc(root, pagesDir, url) {
   if (!url.startsWith("/")) return null;
   if (!isStaticAssetRequest(url)) return null;
   if (url.startsWith(`/${pagesDir}/`)) return null;
-  const candidate = path4.join(root, pagesDir, url.slice(1));
-  if (fs.existsSync(candidate)) {
+  const candidate = path5.join(root, pagesDir, url.slice(1));
+  if (fs2.existsSync(candidate)) {
     return `/${pagesDir}/${url.slice(1)}`;
   }
   return null;
@@ -513,8 +638,8 @@ function installDevServer(args) {
 }
 
 // src/html-asset-validator.ts
-import fs2 from "fs";
-import path5 from "path";
+import fs3 from "fs";
+import path6 from "path";
 function stripQueryAndHash(url) {
   return url.split("#")[0].split("?")[0];
 }
@@ -523,10 +648,10 @@ function isLocalRootUrl(url) {
 }
 function fileExistsForPublicUrl(root, pagesDir, url) {
   const clean = stripQueryAndHash(url).slice(1);
-  const fromSrc = path5.join(root, pagesDir, clean);
-  if (fs2.existsSync(fromSrc)) return true;
-  const fromPublic = path5.join(root, "public", clean);
-  if (fs2.existsSync(fromPublic)) return true;
+  const fromSrc = path6.join(root, pagesDir, clean);
+  if (fs3.existsSync(fromSrc)) return true;
+  const fromPublic = path6.join(root, "public", clean);
+  if (fs3.existsSync(fromPublic)) return true;
   return false;
 }
 function collectScriptSrcs(html) {
@@ -568,8 +693,8 @@ function missingAssetMessage(args) {
   const pageSuffix = formatPageLabel(pageLabel);
   return `[${pluginName}] Missing ${kind}${pageSuffix}: ${url}
 Expected one of:
-- ${path5.join(root, pagesDir, clean)}
-- ${path5.join(root, "public", clean)}`;
+- ${path6.join(root, pagesDir, clean)}
+- ${path6.join(root, "public", clean)}`;
 }
 function reportMissing(args) {
   const message = missingAssetMessage(args);
@@ -683,8 +808,8 @@ async function buildPageIndex(args) {
 }
 
 // src/static-assets.ts
-import fs3 from "fs/promises";
-import path6 from "path";
+import fs4 from "fs/promises";
+import path7 from "path";
 import fg from "fast-glob";
 import * as esbuild from "esbuild";
 import fsSync from "fs";
@@ -708,7 +833,7 @@ function toOutputFileName(relativePathFromSrc) {
 }
 async function collectStaticAssets(args) {
   const { root, pagesDir, pageExtensions } = args;
-  const srcDir = path6.join(root, pagesDir);
+  const srcDir = path7.join(root, pagesDir);
   const entries = await fg("**/*", {
     cwd: srcDir,
     onlyFiles: true,
@@ -720,7 +845,7 @@ async function collectStaticAssets(args) {
     const rel = normalizeSlashes(entry);
     if (shouldIgnoreFile(rel)) continue;
     if (hasAnySuffix(rel, pageExtensions)) continue;
-    const absolutePath = path6.join(srcDir, rel);
+    const absolutePath = path7.join(srcDir, rel);
     assets.push({
       absolutePath,
       relativePathFromSrc: rel,
@@ -731,7 +856,7 @@ async function collectStaticAssets(args) {
   return assets;
 }
 async function copyStaticAssetSource(asset) {
-  return fs3.readFile(asset.absolutePath);
+  return fs4.readFile(asset.absolutePath);
 }
 async function buildProcessedStaticAssets(args) {
   const { root, pagesDir, assets, minify = true, sourcemap = false } = args;
@@ -740,8 +865,8 @@ async function buildProcessedStaticAssets(args) {
   if (processable.length === 0) {
     return out;
   }
-  const srcDir = path6.join(root, pagesDir);
-  const distDir = path6.join(root, "dist");
+  const srcDir = path7.join(root, pagesDir);
+  const distDir = path7.join(root, "dist");
   const warnedMissingAssets = /* @__PURE__ */ new Set();
   const result = await esbuild.build({
     entryPoints: processable.map((a) => a.absolutePath),
@@ -777,15 +902,15 @@ async function buildProcessedStaticAssets(args) {
         name: "html-pages-root-url-resolver",
         setup(build2) {
           build2.onResolve({ filter: /^\// }, (resolveArgs) => {
-            if (path6.isAbsolute(resolveArgs.path) && fsSync.existsSync(resolveArgs.path)) {
+            if (path7.isAbsolute(resolveArgs.path) && fsSync.existsSync(resolveArgs.path)) {
               return { path: resolveArgs.path };
             }
             const cleanPath = resolveArgs.path.slice(1);
-            const fromSrc = path6.join(srcDir, cleanPath);
+            const fromSrc = path7.join(srcDir, cleanPath);
             if (fsSync.existsSync(fromSrc)) {
               return { path: fromSrc };
             }
-            const fromPublic = path6.join(root, "public", cleanPath);
+            const fromPublic = path7.join(root, "public", cleanPath);
             if (fsSync.existsSync(fromPublic)) {
               return {
                 path: resolveArgs.path,
@@ -817,7 +942,7 @@ async function buildProcessedStaticAssets(args) {
     ]
   });
   for (const file of result.outputFiles) {
-    const rel = normalizeSlashes(path6.relative(distDir, file.path));
+    const rel = normalizeSlashes(path7.relative(distDir, file.path));
     out.set(rel, file.text ?? file.contents);
   }
   return out;
@@ -825,12 +950,12 @@ async function buildProcessedStaticAssets(args) {
 
 // src/plugin.ts
 var hasWarnedESM = false;
-var pluginDir = path7.dirname(fileURLToPath(import.meta.url));
+var pluginDir = path8.dirname(fileURLToPath(import.meta.url));
 function warnIfNotESM(root) {
   try {
-    const pkgPath = path7.join(root, "package.json");
-    if (!fs4.existsSync(pkgPath)) return;
-    const pkg = JSON.parse(fs4.readFileSync(pkgPath, "utf8"));
+    const pkgPath = path8.join(root, "package.json");
+    if (!fs5.existsSync(pkgPath)) return;
+    const pkg = JSON.parse(fs5.readFileSync(pkgPath, "utf8"));
     if (pkg.type !== "module") {
       console.warn(
         `[${PLUGIN_NAME}] \u26A0\uFE0F It is recommended to add "type": "module" to your package.json for optimal performance and to avoid Node ESM warnings.`
@@ -838,6 +963,9 @@ function warnIfNotESM(root) {
     }
   } catch {
   }
+}
+function isLocalPageTypesImport2(id) {
+  return /^\.\/\$types(?:\.[A-Za-z0-9_.-]+)?$/.test(id);
 }
 function chunkArray(items, size) {
   const out = [];
@@ -880,6 +1008,11 @@ function htPages(options = {}) {
   }
   async function loadDevPages() {
     const entries = await discoverEntryPages(root, options);
+    await writePageTypeDeclarations({
+      root,
+      pagesDir,
+      entries
+    });
     const modulesByEntry = /* @__PURE__ */ new Map();
     logDebug(
       options.debug,
@@ -910,6 +1043,11 @@ function htPages(options = {}) {
   }
   async function buildPagesPipeline() {
     const entries = await discoverEntryPages(root, options);
+    await writePageTypeDeclarations({
+      root,
+      pagesDir,
+      entries
+    });
     const modulesByEntry = /* @__PURE__ */ new Map();
     const loadModule = await createPageModuleLoader({
       mode: "build",
@@ -962,6 +1100,9 @@ function htPages(options = {}) {
           return RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID;
         }
       }
+      if (importer && isLocalPageTypesImport2(id)) {
+        return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
+      }
       return null;
     },
     async load(id) {
@@ -971,25 +1112,35 @@ function htPages(options = {}) {
       if (id === RESOLVED_VIRTUAL_JSX_RUNTIME_ID) {
         return `
 export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
-          pathToFileURL(path7.join(pluginDir, "jsx-runtime.js")).href
+          pathToFileURL(path8.join(pluginDir, "jsx-runtime.js")).href
         )};
 `;
       }
       if (id === RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID) {
         return `
 export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
-          pathToFileURL(path7.join(pluginDir, "jsx-dev-runtime.js")).href
+          pathToFileURL(path8.join(pluginDir, "jsx-dev-runtime.js")).href
         )};
 `;
       }
       if (id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
         const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
         const { pages } = await buildPagesPipeline();
-        const normalizedImporter = path7.resolve(importer);
+        const normalizedImporter = path8.resolve(importer);
         const page = pages.find(
-          (candidate) => path7.resolve(candidate.absolutePath) === normalizedImporter
+          (candidate) => path8.resolve(candidate.absolutePath) === normalizedImporter
         );
         return generateTypedPageHelper(page);
+      }
+      if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {
+        return `
+export {
+  definePage,
+  defineData,
+  defineStaticParams,
+  definePageModule
+} from 'vite-plugin-html-pages/page';
+`;
       }
       return null;
     },
@@ -1013,7 +1164,7 @@ export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
       };
     },
     configResolved(resolved) {
-      root = options.root ? path7.resolve(resolved.root, options.root) : resolved.root;
+      root = options.root ? path8.resolve(resolved.root, options.root) : resolved.root;
       if (!hasWarnedESM) {
         warnIfNotESM(root);
         hasWarnedESM = true;
@@ -1057,7 +1208,7 @@ export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
       if (!watcherAttached) {
         watcherAttached = true;
         const reload = async (file) => {
-          if (!file.includes(`${path7.sep}${pagesDir}${path7.sep}`) && !file.includes(`/${pagesDir}/`)) {
+          if (!file.includes(`${path8.sep}${pagesDir}${path8.sep}`) && !file.includes(`/${pagesDir}/`)) {
             return;
           }
           logDebug(options.debug, "file changed", file);
@@ -1285,8 +1436,8 @@ ${rssItems}
 }
 
 // src/fetch-cache.ts
-import fs5 from "fs/promises";
-import path8 from "path";
+import fs6 from "fs/promises";
+import path9 from "path";
 import { createHash } from "crypto";
 var memoryCache = /* @__PURE__ */ new Map();
 function createDefaultCacheKey(input, init) {
@@ -1299,7 +1450,7 @@ function createDefaultCacheKey(input, init) {
   return createHash("sha256").update(raw).digest("hex");
 }
 function getCacheFilePath(cacheKey) {
-  return path8.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
+  return path9.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
 }
 function getEffectiveCacheMode(mode) {
   if (mode === "memory" || mode === "fs" || mode === "none") {
@@ -1337,10 +1488,10 @@ async function fetchWithCache(input, init, options = {}) {
   }
   const filePath = getCacheFilePath(cacheKey);
   if (cacheMode === "fs") {
-    await fs5.mkdir(path8.dirname(filePath), { recursive: true });
+    await fs6.mkdir(path9.dirname(filePath), { recursive: true });
     if (!options.forceRefresh) {
       try {
-        const raw = await fs5.readFile(filePath, "utf8");
+        const raw = await fs6.readFile(filePath, "utf8");
         const cached = JSON.parse(raw);
         if (isFresh(cached, maxAge)) {
           return toResponse(cached);
@@ -1361,7 +1512,7 @@ async function fetchWithCache(input, init, options = {}) {
   if (cacheMode === "memory") {
     memoryCache.set(cacheKey, record);
   } else if (cacheMode === "fs") {
-    await fs5.writeFile(filePath, JSON.stringify(record), "utf8");
+    await fs6.writeFile(filePath, JSON.stringify(record), "utf8");
   }
   return new Response(body, {
     status: res.status,
