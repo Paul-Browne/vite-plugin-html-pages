@@ -1,5 +1,21 @@
 // src/plugin.ts
+import fs4 from "fs";
+import path7 from "path";
+import { fileURLToPath, pathToFileURL } from "url";
+import { transform as esbuildTransform } from "esbuild";
 import pLimit from "p-limit";
+
+// src/constants.ts
+var PLUGIN_NAME = "vite-plugin-html-pages";
+var VIRTUAL_BUILD_ENTRY_ID = `\0${PLUGIN_NAME}:build-entry`;
+var VIRTUAL_PAGE_HELPER_ID = `${PLUGIN_NAME}/page`;
+var RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX = `\0${PLUGIN_NAME}/page:`;
+var VIRTUAL_MANIFEST_ID = `\0virtual:${PLUGIN_NAME}-manifest`;
+var CACHE_DIR_NAME = `node_modules/.cache/${PLUGIN_NAME}`;
+var VIRTUAL_JSX_RUNTIME_ID = `${PLUGIN_NAME}/jsx-runtime`;
+var VIRTUAL_JSX_DEV_RUNTIME_ID = `${PLUGIN_NAME}/jsx-dev-runtime`;
+var RESOLVED_VIRTUAL_JSX_RUNTIME_ID = `\0${VIRTUAL_JSX_RUNTIME_ID}`;
+var RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID = `\0${VIRTUAL_JSX_DEV_RUNTIME_ID}`;
 
 // src/discover.ts
 import path2 from "path";
@@ -133,14 +149,6 @@ function extractRouteParamDefinitions(routePattern) {
   return routePattern.split("/").filter(Boolean).map((segment) => parseRouteParamSegment(segment)).filter((value) => value != null);
 }
 
-// src/constants.ts
-var PLUGIN_NAME = "vite-plugin-html-pages";
-var VIRTUAL_BUILD_ENTRY_ID = `\0${PLUGIN_NAME}:build-entry`;
-var VIRTUAL_PAGE_HELPER_ID = `${PLUGIN_NAME}/page`;
-var RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX = `\0${PLUGIN_NAME}/page:`;
-var VIRTUAL_MANIFEST_ID = `\0virtual:${PLUGIN_NAME}-manifest`;
-var CACHE_DIR_NAME = `node_modules/.cache/${PLUGIN_NAME}`;
-
 // src/discover.ts
 function buildDefaultIncludeGlobs(pagesDir, pageExtensions) {
   return pageExtensions.map((ext) => {
@@ -152,7 +160,7 @@ async function discoverEntryPages(root, options) {
   const fgModule = await import("fast-glob");
   const fg2 = fgModule.default ?? fgModule;
   const pagesDir = options.pagesDir ?? "src";
-  const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [".ht.js", ".html.js", ".ht.ts", ".html.ts"];
+  const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [".ht.js", ".html.js", ".ht.ts", ".html.ts", ".ht.jsx", ".html.jsx", ".ht.tsx", ".html.tsx"];
   const include = Array.isArray(options.include) ? options.include : options.include ? [options.include] : buildDefaultIncludeGlobs(pagesDir, pageExtensions);
   const exclude = Array.isArray(options.exclude) ? options.exclude : options.exclude ? [options.exclude] : [];
   const pagesRoot = normalizeFsPath(path2.join(root, pagesDir));
@@ -246,9 +254,44 @@ async function renderPage(page, mod, dev = false) {
 // src/module-loader.ts
 import path3 from "path";
 import { createServer } from "vite";
+
+// src/page-helper-generator.ts
+function paramsTypeFromDefinitions(paramDefinitions) {
+  if (paramDefinitions.length === 0) {
+    return "{}";
+  }
+  const fields = paramDefinitions.map((param) => {
+    if (param.type === "single") {
+      return `${JSON.stringify(param.name)}: string`;
+    }
+    if (param.type === "catch-all") {
+      return `${JSON.stringify(param.name)}: string[]`;
+    }
+    return `${JSON.stringify(param.name)}?: string[]`;
+  });
+  return `{ ${fields.join("; ")} }`;
+}
+function generateTypedPageHelper(page) {
+  const paramsType = page ? paramsTypeFromDefinitions(page.paramDefinitions ?? []) : "{}";
+  return `
+export type PageParams = ${paramsType};
+
+export type PageContext = {
+  params: PageParams;
+  data?: unknown;
+  dev: boolean;
+};
+
+export function definePage<T extends (ctx: PageContext) => any>(fn: T): T {
+  return fn;
+}
+`;
+}
+
+// src/module-loader.ts
 var buildServer = null;
 async function createPageModuleLoader(args) {
-  const { mode, root, server } = args;
+  const { mode, root, server, getPages } = args;
   if (mode === "dev") {
     if (!server) {
       throw new Error("[vite-plugin-html-pages] dev server not available");
@@ -258,15 +301,49 @@ async function createPageModuleLoader(args) {
       return mod;
     };
   }
+  if (!getPages) {
+    throw new Error(
+      "[vite-plugin-html-pages] getPages is required in build mode"
+    );
+  }
   if (!buildServer) {
     const config = {
       root,
       configFile: false,
       logLevel: "error",
       appType: "custom",
+      esbuild: {
+        jsx: "automatic",
+        jsxImportSource: "vite-plugin-html-pages"
+      },
       server: {
         middlewareMode: true
-      }
+      },
+      plugins: [
+        {
+          name: "vite-plugin-html-pages:page-helper",
+          resolveId(id, importer) {
+            if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
+              return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
+            }
+            return null;
+          },
+          async load(id) {
+            if (!id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
+              return null;
+            }
+            const importer = id.slice(
+              RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length
+            );
+            const pages = await getPages();
+            const normalizedImporter = path3.resolve(importer);
+            const page = pages.find(
+              (candidate) => path3.resolve(candidate.absolutePath) === normalizedImporter
+            );
+            return generateTypedPageHelper(page);
+          }
+        }
+      ]
     };
     buildServer = await createServer(config);
   }
@@ -352,196 +429,9 @@ function installDevServer(args) {
   });
 }
 
-// src/page-index.ts
-async function buildPageIndex(args) {
-  const { entries, modulesByEntry, cleanUrls } = args;
-  const pages = [];
-  for (const entry of entries) {
-    const mod = modulesByEntry.get(entry.entryPath) ?? {};
-    if (entry.dynamic) {
-      const rows = (mod.generateStaticParams ? await mod.generateStaticParams() : []) ?? [];
-      pages.push(
-        ...expandStaticPaths(
-          {
-            id: entry.id,
-            entryPath: entry.entryPath,
-            absolutePath: entry.absolutePath,
-            relativePath: entry.relativePath,
-            routePattern: entry.routePattern,
-            dynamic: entry.dynamic,
-            paramNames: entry.paramNames
-          },
-          Array.isArray(rows) ? rows : [],
-          cleanUrls
-        )
-      );
-    } else {
-      pages.push({
-        ...entry,
-        routePath: entry.routePattern,
-        fileName: fileNameFromRoute(entry.routePattern, cleanUrls),
-        params: {}
-      });
-    }
-  }
-  pages.sort((a, b) => compareRoutePriority(a.routePattern, b.routePattern));
-  const seenRoutes = /* @__PURE__ */ new Map();
-  for (const page of pages) {
-    const existing = seenRoutes.get(page.routePath);
-    if (existing) {
-      throw new Error(
-        `[${PLUGIN_NAME}] Duplicate route generated: "${page.routePath}" from "${existing.relativePath}" and "${page.relativePath}"`
-      );
-    }
-    seenRoutes.set(page.routePath, page);
-  }
-  return pages;
-}
-
-// src/static-assets.ts
-import fs2 from "fs/promises";
-import path5 from "path";
-import fg from "fast-glob";
-import * as esbuild from "esbuild";
-import fsSync from "fs";
-function normalizeSlashes(value) {
-  return value.replace(/\\/g, "/");
-}
-function hasAnySuffix(value, suffixes) {
-  return suffixes.some((suffix) => value.endsWith(suffix));
-}
-function shouldIgnoreFile(rel) {
-  return rel.endsWith(".d.ts") || rel.endsWith(".map") || rel.endsWith(".tsbuildinfo") || rel.startsWith(".") || rel.includes("/.");
-}
-function isProcessableAsset(rel) {
-  return rel.endsWith(".js") || rel.endsWith(".mjs") || rel.endsWith(".ts") || rel.endsWith(".css");
-}
-function toOutputFileName(relativePathFromSrc) {
-  if (relativePathFromSrc.endsWith(".ts")) {
-    return relativePathFromSrc.slice(0, -3) + ".js";
-  }
-  return relativePathFromSrc;
-}
-async function collectStaticAssets(args) {
-  const { root, pagesDir, pageExtensions } = args;
-  const srcDir = path5.join(root, pagesDir);
-  const entries = await fg("**/*", {
-    cwd: srcDir,
-    onlyFiles: true,
-    dot: false,
-    absolute: false
-  });
-  const assets = [];
-  for (const entry of entries) {
-    const rel = normalizeSlashes(entry);
-    if (shouldIgnoreFile(rel)) continue;
-    if (hasAnySuffix(rel, pageExtensions)) continue;
-    const absolutePath = path5.join(srcDir, rel);
-    assets.push({
-      absolutePath,
-      relativePathFromSrc: rel,
-      outputFileName: normalizeSlashes(toOutputFileName(rel)),
-      kind: isProcessableAsset(rel) ? "process" : "copy"
-    });
-  }
-  return assets;
-}
-async function copyStaticAssetSource(asset) {
-  return fs2.readFile(asset.absolutePath);
-}
-async function buildProcessedStaticAssets(args) {
-  const { root, pagesDir, assets, minify = true, sourcemap = false } = args;
-  const processable = assets.filter((a) => a.kind === "process");
-  const out = /* @__PURE__ */ new Map();
-  if (processable.length === 0) {
-    return out;
-  }
-  const srcDir = path5.join(root, pagesDir);
-  const distDir = path5.join(root, "dist");
-  const warnedMissingAssets = /* @__PURE__ */ new Set();
-  const result = await esbuild.build({
-    entryPoints: processable.map((a) => a.absolutePath),
-    absWorkingDir: root,
-    outbase: srcDir,
-    outdir: distDir,
-    bundle: true,
-    splitting: true,
-    treeShaking: true,
-    minify,
-    sourcemap,
-    format: "esm",
-    target: "es2020",
-    platform: "browser",
-    write: false,
-    entryNames: "[dir]/[name]",
-    assetNames: "[dir]/[name]",
-    loader: {
-      ".css": "css",
-      ".png": "file",
-      ".jpg": "file",
-      ".jpeg": "file",
-      ".gif": "file",
-      ".svg": "file",
-      ".webp": "file",
-      ".woff": "file",
-      ".woff2": "file",
-      ".ttf": "file",
-      ".otf": "file"
-    },
-    plugins: [
-      {
-        name: "html-pages-root-url-resolver",
-        setup(build2) {
-          build2.onResolve({ filter: /^\// }, (resolveArgs) => {
-            if (path5.isAbsolute(resolveArgs.path) && fsSync.existsSync(resolveArgs.path)) {
-              return { path: resolveArgs.path };
-            }
-            const cleanPath = resolveArgs.path.slice(1);
-            const fromSrc = path5.join(srcDir, cleanPath);
-            if (fsSync.existsSync(fromSrc)) {
-              return { path: fromSrc };
-            }
-            const fromPublic = path5.join(root, "public", cleanPath);
-            if (fsSync.existsSync(fromPublic)) {
-              return {
-                path: resolveArgs.path,
-                external: true
-              };
-            }
-            const isCssUrlToken = resolveArgs.kind === "url-token";
-            if (isCssUrlToken) {
-              if (!warnedMissingAssets.has(resolveArgs.path)) {
-                warnedMissingAssets.add(resolveArgs.path);
-                console.warn(
-                  `[vite-plugin-html-pages] \u26A0\uFE0F Missing CSS asset: ${resolveArgs.path}
-  Looked in:
-  - ${fromSrc}
-  - ${fromPublic}`
-                );
-              }
-              return {
-                path: resolveArgs.path,
-                external: true
-              };
-            }
-            return {
-              path: fromSrc
-            };
-          });
-        }
-      }
-    ]
-  });
-  for (const file of result.outputFiles) {
-    const rel = normalizeSlashes(path5.relative(distDir, file.path));
-    out.set(rel, file.text ?? file.contents);
-  }
-  return out;
-}
-
 // src/html-asset-validator.ts
-import fs3 from "fs";
-import path6 from "path";
+import fs2 from "fs";
+import path5 from "path";
 function stripQueryAndHash(url) {
   return url.split("#")[0].split("?")[0];
 }
@@ -550,10 +440,10 @@ function isLocalRootUrl(url) {
 }
 function fileExistsForPublicUrl(root, pagesDir, url) {
   const clean = stripQueryAndHash(url).slice(1);
-  const fromSrc = path6.join(root, pagesDir, clean);
-  if (fs3.existsSync(fromSrc)) return true;
-  const fromPublic = path6.join(root, "public", clean);
-  if (fs3.existsSync(fromPublic)) return true;
+  const fromSrc = path5.join(root, pagesDir, clean);
+  if (fs2.existsSync(fromSrc)) return true;
+  const fromPublic = path5.join(root, "public", clean);
+  if (fs2.existsSync(fromPublic)) return true;
   return false;
 }
 function collectScriptSrcs(html) {
@@ -595,8 +485,8 @@ function missingAssetMessage(args) {
   const pageSuffix = formatPageLabel(pageLabel);
   return `[${pluginName}] Missing ${kind}${pageSuffix}: ${url}
 Expected one of:
-- ${path6.join(root, pagesDir, clean)}
-- ${path6.join(root, "public", clean)}`;
+- ${path5.join(root, pagesDir, clean)}
+- ${path5.join(root, "public", clean)}`;
 }
 function reportMissing(args) {
   const message = missingAssetMessage(args);
@@ -662,43 +552,196 @@ function validateHtmlAssetReferences(options) {
   }
 }
 
-// src/page-helper-generator.ts
-function paramsTypeFromDefinitions(paramDefinitions) {
-  if (paramDefinitions.length === 0) {
-    return "{}";
+// src/page-index.ts
+async function buildPageIndex(args) {
+  const { entries, modulesByEntry, cleanUrls } = args;
+  const pages = [];
+  for (const entry of entries) {
+    const mod = modulesByEntry.get(entry.entryPath) ?? {};
+    if (entry.dynamic) {
+      const rows = (mod.generateStaticParams ? await mod.generateStaticParams() : []) ?? [];
+      pages.push(
+        ...expandStaticPaths(
+          {
+            id: entry.id,
+            entryPath: entry.entryPath,
+            absolutePath: entry.absolutePath,
+            relativePath: entry.relativePath,
+            routePattern: entry.routePattern,
+            dynamic: entry.dynamic,
+            paramNames: entry.paramNames
+          },
+          Array.isArray(rows) ? rows : [],
+          cleanUrls
+        )
+      );
+    } else {
+      pages.push({
+        ...entry,
+        routePath: entry.routePattern,
+        fileName: fileNameFromRoute(entry.routePattern, cleanUrls),
+        params: {}
+      });
+    }
   }
-  const fields = paramDefinitions.map((param) => {
-    if (param.type === "single") {
-      return `${JSON.stringify(param.name)}: string`;
+  pages.sort((a, b) => compareRoutePriority(a.routePattern, b.routePattern));
+  const seenRoutes = /* @__PURE__ */ new Map();
+  for (const page of pages) {
+    const existing = seenRoutes.get(page.routePath);
+    if (existing) {
+      throw new Error(
+        `[${PLUGIN_NAME}] Duplicate route generated: "${page.routePath}" from "${existing.relativePath}" and "${page.relativePath}"`
+      );
     }
-    if (param.type === "catch-all") {
-      return `${JSON.stringify(param.name)}: string[]`;
-    }
-    return `${JSON.stringify(param.name)}?: string[]`;
+    seenRoutes.set(page.routePath, page);
+  }
+  return pages;
+}
+
+// src/static-assets.ts
+import fs3 from "fs/promises";
+import path6 from "path";
+import fg from "fast-glob";
+import * as esbuild from "esbuild";
+import fsSync from "fs";
+function normalizeSlashes(value) {
+  return value.replace(/\\/g, "/");
+}
+function hasAnySuffix(value, suffixes) {
+  return suffixes.some((suffix) => value.endsWith(suffix));
+}
+function shouldIgnoreFile(rel) {
+  return rel.endsWith(".d.ts") || rel.endsWith(".map") || rel.endsWith(".tsbuildinfo") || rel.startsWith(".") || rel.includes("/.");
+}
+function isProcessableAsset(rel) {
+  return rel.endsWith(".js") || rel.endsWith(".mjs") || rel.endsWith(".ts") || rel.endsWith(".css");
+}
+function toOutputFileName(relativePathFromSrc) {
+  if (relativePathFromSrc.endsWith(".ts")) {
+    return relativePathFromSrc.slice(0, -3) + ".js";
+  }
+  return relativePathFromSrc;
+}
+async function collectStaticAssets(args) {
+  const { root, pagesDir, pageExtensions } = args;
+  const srcDir = path6.join(root, pagesDir);
+  const entries = await fg("**/*", {
+    cwd: srcDir,
+    onlyFiles: true,
+    dot: false,
+    absolute: false
   });
-  return `{ ${fields.join("; ")} }`;
+  const assets = [];
+  for (const entry of entries) {
+    const rel = normalizeSlashes(entry);
+    if (shouldIgnoreFile(rel)) continue;
+    if (hasAnySuffix(rel, pageExtensions)) continue;
+    const absolutePath = path6.join(srcDir, rel);
+    assets.push({
+      absolutePath,
+      relativePathFromSrc: rel,
+      outputFileName: normalizeSlashes(toOutputFileName(rel)),
+      kind: isProcessableAsset(rel) ? "process" : "copy"
+    });
+  }
+  return assets;
 }
-function generateTypedPageHelper(page) {
-  const paramsType = page ? paramsTypeFromDefinitions(page.paramDefinitions ?? []) : "{}";
-  return `
-export type PageParams = ${paramsType};
-
-export type PageContext = {
-  params: PageParams;
-  data?: unknown;
-  dev: boolean;
-};
-
-export function definePage<T extends (ctx: PageContext) => any>(fn: T): T {
-  return fn;
+async function copyStaticAssetSource(asset) {
+  return fs3.readFile(asset.absolutePath);
 }
-`;
+async function buildProcessedStaticAssets(args) {
+  const { root, pagesDir, assets, minify = true, sourcemap = false } = args;
+  const processable = assets.filter((a) => a.kind === "process");
+  const out = /* @__PURE__ */ new Map();
+  if (processable.length === 0) {
+    return out;
+  }
+  const srcDir = path6.join(root, pagesDir);
+  const distDir = path6.join(root, "dist");
+  const warnedMissingAssets = /* @__PURE__ */ new Set();
+  const result = await esbuild.build({
+    entryPoints: processable.map((a) => a.absolutePath),
+    absWorkingDir: root,
+    outbase: srcDir,
+    outdir: distDir,
+    bundle: true,
+    splitting: true,
+    treeShaking: true,
+    minify,
+    sourcemap,
+    format: "esm",
+    target: "es2020",
+    platform: "browser",
+    write: false,
+    entryNames: "[dir]/[name]",
+    assetNames: "[dir]/[name]",
+    loader: {
+      ".css": "css",
+      ".png": "file",
+      ".jpg": "file",
+      ".jpeg": "file",
+      ".gif": "file",
+      ".svg": "file",
+      ".webp": "file",
+      ".woff": "file",
+      ".woff2": "file",
+      ".ttf": "file",
+      ".otf": "file"
+    },
+    plugins: [
+      {
+        name: "html-pages-root-url-resolver",
+        setup(build2) {
+          build2.onResolve({ filter: /^\// }, (resolveArgs) => {
+            if (path6.isAbsolute(resolveArgs.path) && fsSync.existsSync(resolveArgs.path)) {
+              return { path: resolveArgs.path };
+            }
+            const cleanPath = resolveArgs.path.slice(1);
+            const fromSrc = path6.join(srcDir, cleanPath);
+            if (fsSync.existsSync(fromSrc)) {
+              return { path: fromSrc };
+            }
+            const fromPublic = path6.join(root, "public", cleanPath);
+            if (fsSync.existsSync(fromPublic)) {
+              return {
+                path: resolveArgs.path,
+                external: true
+              };
+            }
+            const isCssUrlToken = resolveArgs.kind === "url-token";
+            if (isCssUrlToken) {
+              if (!warnedMissingAssets.has(resolveArgs.path)) {
+                warnedMissingAssets.add(resolveArgs.path);
+                console.warn(
+                  `[vite-plugin-html-pages] \u26A0\uFE0F Missing CSS asset: ${resolveArgs.path}
+  Looked in:
+  - ${fromSrc}
+  - ${fromPublic}`
+                );
+              }
+              return {
+                path: resolveArgs.path,
+                external: true
+              };
+            }
+            return {
+              path: fromSrc
+            };
+          });
+        }
+      }
+    ]
+  });
+  for (const file of result.outputFiles) {
+    const rel = normalizeSlashes(path6.relative(distDir, file.path));
+    out.set(rel, file.text ?? file.contents);
+  }
+  return out;
 }
 
 // src/plugin.ts
-import fs4 from "fs";
-import path7 from "path";
 var hasWarnedESM = false;
+var pluginDir = path7.dirname(fileURLToPath(import.meta.url));
 function warnIfNotESM(root) {
   try {
     const pkgPath = path7.join(root, "package.json");
@@ -719,6 +762,17 @@ function chunkArray(items, size) {
   }
   return out;
 }
+function isHtJsxFile(id) {
+  return id.endsWith(".ht.jsx") || id.endsWith(".html.jsx") || id.endsWith(".ht.tsx") || id.endsWith(".html.tsx");
+}
+function isHtTsxFile(id) {
+  return id.endsWith(".ht.tsx") || id.endsWith(".html.tsx");
+}
+function isHtJsxImporter(importer) {
+  if (!importer) return false;
+  const normalized = importer.split("?")[0].replace(/\\/g, "/");
+  return isHtJsxFile(normalized);
+}
 function htPages(options = {}) {
   let root = process.cwd();
   let server = null;
@@ -726,7 +780,16 @@ function htPages(options = {}) {
   let watcherAttached = false;
   const cleanUrls = options.cleanUrls ?? true;
   const pagesDir = options.pagesDir ?? "src";
-  const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [".ht.js", ".html.js", ".ht.ts", ".html.ts"];
+  const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [
+    ".ht.js",
+    ".html.js",
+    ".ht.ts",
+    ".html.ts",
+    ".ht.jsx",
+    ".html.jsx",
+    ".ht.tsx",
+    ".html.tsx"
+  ];
   function logDebug(enabled, ...args) {
     if (!enabled) return;
     console.log(`[${PLUGIN_NAME}]`, ...args);
@@ -766,7 +829,8 @@ function htPages(options = {}) {
     const modulesByEntry = /* @__PURE__ */ new Map();
     const loadModule = await createPageModuleLoader({
       mode: "build",
-      root
+      root,
+      getPages: async () => entries
     });
     for (const entry of entries) {
       const mod = await loadModule(entry.entryPath, entry.relativePath);
@@ -794,15 +858,45 @@ function htPages(options = {}) {
       };
     },
     resolveId(id, importer) {
-      if (id === VIRTUAL_BUILD_ENTRY_ID) return id;
+      if (id === VIRTUAL_BUILD_ENTRY_ID) {
+        return id;
+      }
       if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
         return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
+      }
+      if (id === VIRTUAL_JSX_RUNTIME_ID) {
+        return RESOLVED_VIRTUAL_JSX_RUNTIME_ID;
+      }
+      if (id === VIRTUAL_JSX_DEV_RUNTIME_ID) {
+        return RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID;
+      }
+      if (isHtJsxImporter(importer)) {
+        if (id === "react/jsx-runtime") {
+          return RESOLVED_VIRTUAL_JSX_RUNTIME_ID;
+        }
+        if (id === "react/jsx-dev-runtime") {
+          return RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID;
+        }
       }
       return null;
     },
     async load(id) {
       if (id === VIRTUAL_BUILD_ENTRY_ID) {
         return "export default {};";
+      }
+      if (id === RESOLVED_VIRTUAL_JSX_RUNTIME_ID) {
+        return `
+export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
+          pathToFileURL(path7.join(pluginDir, "jsx-runtime.js")).href
+        )};
+`;
+      }
+      if (id === RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID) {
+        return `
+export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
+          pathToFileURL(path7.join(pluginDir, "jsx-dev-runtime.js")).href
+        )};
+`;
       }
       if (id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
         const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
@@ -814,6 +908,25 @@ function htPages(options = {}) {
         return generateTypedPageHelper(page);
       }
       return null;
+    },
+    async transform(code, id) {
+      const normalizedId = id.split("?")[0].replace(/\\/g, "/");
+      if (!isHtJsxFile(normalizedId)) {
+        return null;
+      }
+      const result = await esbuildTransform(code, {
+        loader: isHtTsxFile(normalizedId) ? "tsx" : "jsx",
+        format: "esm",
+        jsx: "automatic",
+        jsxImportSource: "vite-plugin-html-pages",
+        sourcemap: true,
+        sourcefile: normalizedId,
+        target: "es2020"
+      });
+      return {
+        code: result.code,
+        map: result.map
+      };
     },
     configResolved(resolved) {
       root = options.root ? path7.resolve(resolved.root, options.root) : resolved.root;
@@ -860,12 +973,15 @@ function htPages(options = {}) {
       if (!watcherAttached) {
         watcherAttached = true;
         const reload = async (file) => {
-          if (!file.includes(`${path7.sep}src${path7.sep}`) && !file.includes("/src/")) {
+          if (!file.includes(`${path7.sep}${pagesDir}${path7.sep}`) && !file.includes(`/${pagesDir}/`)) {
             return;
           }
           logDebug(options.debug, "file changed", file);
           await loadDevPages();
-          server?.ws.send({ type: "full-reload" });
+          server?.ws.send({
+            type: "full-reload",
+            path: "*"
+          });
         };
         server.watcher.on("add", reload);
         server.watcher.on("change", reload);
@@ -877,15 +993,6 @@ function htPages(options = {}) {
         );
       });
     },
-    // async handleHotUpdate(ctx) {
-    //   if (!server) return;
-    //   logDebug(options.debug, 'file changed', ctx.file);
-    //   await loadDevPages();
-    //   server.ws.send({
-    //     type: 'full-reload',
-    //   });
-    //   return [];
-    // },
     async generateBundle(_, bundle) {
       try {
         const { modulesByEntry, pages } = await buildPagesPipeline();

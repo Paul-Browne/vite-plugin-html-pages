@@ -25,7 +25,7 @@ export async function discoverEntryPages(
   const pagesDir = options.pagesDir ?? 'src';
   const pageExtensions = options.pageExtensions?.length
     ? options.pageExtensions
-    : ['.ht.js', '.html.js', '.ht.ts', '.html.ts'];
+    : ['.ht.js', '.html.js', '.ht.ts', '.html.ts', '.ht.jsx', '.html.jsx', '.ht.tsx', '.html.tsx'];
 
   const include = Array.isArray(options.include)
     ? options.include

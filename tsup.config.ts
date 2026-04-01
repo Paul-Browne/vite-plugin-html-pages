@@ -1,7 +1,12 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: [
+    'src/index.ts',
+    'src/page.ts',
+    'src/jsx-runtime.ts',
+    'src/jsx-dev-runtime.ts',
+  ],
   format: ['esm'],
   dts: true,
   sourcemap: true,
@@ -13,6 +18,8 @@ export default defineConfig({
     'vite',
     'fast-glob',
     'p-limit',
-    'esbuild'
+    'esbuild',
+    'javascript-to-html',
   ],
+  tsconfig: './tsconfig.json'
 });

@@ -1,6 +1,12 @@
 import path from 'node:path';
 import { createServer, type InlineConfig, type ViteDevServer } from 'vite';
-import type { HtPageModule } from './types';
+
+import {
+  VIRTUAL_PAGE_HELPER_ID,
+  RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX,
+} from './constants';
+import { generateTypedPageHelper } from './page-helper-generator';
+import type { HtPageInfo, HtPageModule } from './types';
 
 export type PageModuleLoader = (
   entryPath: string,
@@ -13,8 +19,9 @@ export async function createPageModuleLoader(args: {
   mode: 'dev' | 'build';
   root: string;
   server?: ViteDevServer | null;
+  getPages?: () => Promise<HtPageInfo[]>;
 }): Promise<PageModuleLoader> {
-  const { mode, root, server } = args;
+  const { mode, root, server, getPages } = args;
 
   if (mode === 'dev') {
     if (!server) {
@@ -27,15 +34,58 @@ export async function createPageModuleLoader(args: {
     };
   }
 
+  if (!getPages) {
+    throw new Error(
+      '[vite-plugin-html-pages] getPages is required in build mode',
+    );
+  }
+
   if (!buildServer) {
     const config: InlineConfig = {
       root,
       configFile: false,
       logLevel: 'error',
       appType: 'custom',
+      esbuild: {
+        jsx: 'automatic',
+        jsxImportSource: 'vite-plugin-html-pages',
+      },
       server: {
         middlewareMode: true,
       },
+      plugins: [
+        {
+          name: 'vite-plugin-html-pages:page-helper',
+
+          resolveId(id, importer) {
+            if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
+              return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
+            }
+
+            return null;
+          },
+
+          async load(id) {
+            if (!id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
+              return null;
+            }
+
+            const importer = id.slice(
+              RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length,
+            );
+
+            const pages = await getPages();
+            const normalizedImporter = path.resolve(importer);
+
+            const page = pages.find(
+              (candidate) =>
+                path.resolve(candidate.absolutePath) === normalizedImporter,
+            );
+
+            return generateTypedPageHelper(page);
+          },
+        },
+      ],
     };
 
     buildServer = await createServer(config);

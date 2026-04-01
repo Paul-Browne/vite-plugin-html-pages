@@ -1,30 +1,38 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { transform as esbuildTransform } from 'esbuild';
 import pLimit from 'p-limit';
 import type { Plugin, ViteDevServer } from 'vite';
 
+import {
+  PLUGIN_NAME,
+  VIRTUAL_BUILD_ENTRY_ID,
+  VIRTUAL_PAGE_HELPER_ID,
+  RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX,
+  VIRTUAL_JSX_RUNTIME_ID,
+  VIRTUAL_JSX_DEV_RUNTIME_ID,
+  RESOLVED_VIRTUAL_JSX_RUNTIME_ID,
+  RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID,
+} from './constants';
 import { discoverEntryPages } from './discover';
 import { installDevServer } from './dev-server';
+import { validateHtmlAssetReferences } from './html-asset-validator';
 import { createPageModuleLoader, closePageModuleLoader } from './module-loader';
 import { buildPageIndex } from './page-index';
+import { generateTypedPageHelper } from './page-helper-generator';
 import { renderPage } from './render-runtime';
 import {
   buildProcessedStaticAssets,
   collectStaticAssets,
   copyStaticAssetSource,
 } from './static-assets';
-import { validateHtmlAssetReferences } from './html-asset-validator';
 import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
-import {
-  PLUGIN_NAME,
-  VIRTUAL_BUILD_ENTRY_ID,
-  VIRTUAL_PAGE_HELPER_ID,
-  RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX,
-} from './constants';
-import { generateTypedPageHelper } from './page-helper-generator';
-
-import fs from 'node:fs';
-import path from 'node:path';
 
 let hasWarnedESM = false;
+
+const pluginDir = path.dirname(fileURLToPath(import.meta.url));
 
 function warnIfNotESM(root: string) {
   try {
@@ -52,6 +60,27 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+function isHtJsxFile(id: string): boolean {
+  return (
+    id.endsWith('.ht.jsx') ||
+    id.endsWith('.html.jsx') ||
+    id.endsWith('.ht.tsx') ||
+    id.endsWith('.html.tsx')
+  );
+}
+
+function isHtTsxFile(id: string): boolean {
+  return id.endsWith('.ht.tsx') || id.endsWith('.html.tsx');
+}
+
+function isHtJsxImporter(importer: string | undefined): boolean {
+  if (!importer) return false;
+
+  const normalized = importer.split('?')[0].replace(/\\/g, '/');
+
+  return isHtJsxFile(normalized);
+}
+
 export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   let root = process.cwd();
   let server: ViteDevServer | null = null;
@@ -62,7 +91,16 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   const pagesDir = options.pagesDir ?? 'src';
   const pageExtensions = options.pageExtensions?.length
     ? options.pageExtensions
-    : ['.ht.js', '.html.js', '.ht.ts', '.html.ts'];
+    : [
+        '.ht.js',
+        '.html.js',
+        '.ht.ts',
+        '.html.ts',
+        '.ht.jsx',
+        '.html.jsx',
+        '.ht.tsx',
+        '.html.tsx',
+      ];
 
   function logDebug(enabled: boolean | undefined, ...args: unknown[]) {
     if (!enabled) return;
@@ -114,6 +152,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
     const loadModule = await createPageModuleLoader({
       mode: 'build',
       root,
+      getPages: async () => entries,
     });
 
     for (const entry of entries) {
@@ -149,12 +188,32 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
     },
 
     resolveId(id, importer) {
-      if (id === VIRTUAL_BUILD_ENTRY_ID) return id;
-    
+      if (id === VIRTUAL_BUILD_ENTRY_ID) {
+        return id;
+      }
+
       if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
         return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
       }
-    
+
+      if (id === VIRTUAL_JSX_RUNTIME_ID) {
+        return RESOLVED_VIRTUAL_JSX_RUNTIME_ID;
+      }
+
+      if (id === VIRTUAL_JSX_DEV_RUNTIME_ID) {
+        return RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID;
+      }
+
+      if (isHtJsxImporter(importer)) {
+        if (id === 'react/jsx-runtime') {
+          return RESOLVED_VIRTUAL_JSX_RUNTIME_ID;
+        }
+
+        if (id === 'react/jsx-dev-runtime') {
+          return RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID;
+        }
+      }
+
       return null;
     },
 
@@ -162,26 +221,66 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       if (id === VIRTUAL_BUILD_ENTRY_ID) {
         return 'export default {};';
       }
-    
+
+      if (id === RESOLVED_VIRTUAL_JSX_RUNTIME_ID) {
+        return `
+export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
+          pathToFileURL(path.join(pluginDir, 'jsx-runtime.js')).href,
+        )};
+`;
+      }
+
+      if (id === RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID) {
+        return `
+export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
+          pathToFileURL(path.join(pluginDir, 'jsx-dev-runtime.js')).href,
+        )};
+`;
+      }
+
       if (id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
         const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
         const { pages } = await buildPagesPipeline();
-    
+
         const normalizedImporter = path.resolve(importer);
-    
+
         const page = pages.find(
-          (candidate) => path.resolve(candidate.absolutePath) === normalizedImporter,
+          (candidate) =>
+            path.resolve(candidate.absolutePath) === normalizedImporter,
         );
-    
+
         return generateTypedPageHelper(page);
       }
-    
+
       return null;
+    },
+
+    async transform(code, id) {
+      const normalizedId = id.split('?')[0].replace(/\\/g, '/');
+
+      if (!isHtJsxFile(normalizedId)) {
+        return null;
+      }
+
+      const result = await esbuildTransform(code, {
+        loader: isHtTsxFile(normalizedId) ? 'tsx' : 'jsx',
+        format: 'esm',
+        jsx: 'automatic',
+        jsxImportSource: 'vite-plugin-html-pages',
+        sourcemap: true,
+        sourcefile: normalizedId,
+        target: 'es2020',
+      });
+
+      return {
+        code: result.code,
+        map: result.map,
+      };
     },
 
     configResolved(resolved) {
       root = options.root ? path.resolve(resolved.root, options.root) : resolved.root;
-    
+
       if (!hasWarnedESM) {
         warnIfNotESM(root);
         hasWarnedESM = true;
@@ -218,7 +317,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
     configureServer(_server) {
       server = _server;
-    
+
       installDevServer({
         server,
         root,
@@ -229,28 +328,33 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
         },
         getEntries: async () => discoverEntryPages(root, options),
       });
-    
+
       if (!watcherAttached) {
         watcherAttached = true;
-    
+
         const reload = async (file: string) => {
-          if (!file.includes(`${path.sep}src${path.sep}`) && !file.includes('/src/')) {
+          if (
+            !file.includes(`${path.sep}${pagesDir}${path.sep}`) &&
+            !file.includes(`/${pagesDir}/`)
+          ) {
             return;
           }
-    
-          logDebug(options.debug, 'file changed', file);
-    
-          await loadDevPages();
-    
-          server?.ws.send({ type: 'full-reload' });
 
+          logDebug(options.debug, 'file changed', file);
+
+          await loadDevPages();
+
+          server?.ws.send({
+            type: 'full-reload',
+            path: '*',
+          });
         };
-    
+
         server.watcher.on('add', reload);
         server.watcher.on('change', reload);
         server.watcher.on('unlink', reload);
       }
-    
+
       loadDevPages().catch((error) => {
         server?.config.logger.error(
           `[${PLUGIN_NAME}] loadDevPages failed: ${
@@ -259,20 +363,6 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
         );
       });
     },
-
-    // async handleHotUpdate(ctx) {
-    //   if (!server) return;
-    
-    //   logDebug(options.debug, 'file changed', ctx.file);
-    
-    //   await loadDevPages();
-    
-    //   server.ws.send({
-    //     type: 'full-reload',
-    //   });
-    
-    //   return [];
-    // },
 
     async generateBundle(_, bundle) {
       try {
@@ -355,7 +445,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
                   pageLabel: page.relativePath,
                   missingAssets: options.missingAssets ?? 'error',
                 });
-                
+
                 this.emitFile({
                   type: 'asset',
                   fileName: options.mapOutputPath?.(page) ?? page.fileName,
@@ -387,7 +477,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
             pageLabel: notFoundPage.relativePath,
             missingAssets: options.missingAssets ?? 'error',
           });
-          
+
           this.emitFile({
             type: 'asset',
             fileName: '404.html',
@@ -474,24 +564,24 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
         if (rss?.site) {
           const routePrefix = rss.routePrefix ?? '/blog';
-        
+
           const rssItems = pages
             .filter((page) => page.routePath.startsWith(routePrefix))
             .map((page) => {
               const url = `${rss.site}${page.routePath}`;
-        
+
               return `  <item>\n    <title>${page.routePath}</title>\n    <link>${url}</link>\n    <guid>${url}</guid>\n  </item>`;
             })
             .join('\n');
-        
+
           const rssXml = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n  <title>${rss.title ?? PLUGIN_NAME}</title>\n  <link>${rss.site}</link>\n  <description>${rss.description ?? 'RSS feed'}</description>\n${rssItems}\n</channel>\n</rss>\n`;
-        
+
           this.emitFile({
             type: 'asset',
             fileName: 'rss.xml',
             source: rssXml,
           });
-        
+
           logDebug(options.debug, 'generated rss.xml');
         }
 
@@ -506,7 +596,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       } finally {
         await closePageModuleLoader();
       }
-    }
+    },
   };
 }
 
