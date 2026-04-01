@@ -332,12 +332,6 @@ export type PageModule<TData = unknown> = {
   render: (ctx: RenderContext<TData>) => any;
 };
 
-export function definePageModule<TData>(
-  mod: PageModule<TData>,
-): PageModule<TData> {
-  return mod;
-}
-
 export function definePage<T extends (ctx: PageContext) => any>(fn: T): T {
   return fn;
 }
