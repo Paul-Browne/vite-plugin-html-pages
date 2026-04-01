@@ -37,12 +37,12 @@ function paramsTypeFromDefinitions(paramDefinitions) {
   }
   const fields = paramDefinitions.map((param) => {
     if (param.type === "single") {
-      return `${JSON.stringify(param.name)}: string`;
+      return `${param.name}: string`;
     }
     if (param.type === "catch-all") {
-      return `${JSON.stringify(param.name)}: string[]`;
+      return `${param.name}: string[]`;
     }
-    return `${JSON.stringify(param.name)}?: string[]`;
+    return `${param.name}?: string[]`;
   });
   return `{ ${fields.join("; ")} }`;
 }
@@ -72,14 +72,21 @@ export type PageContext<TData = unknown> = {
 export type PageModule<TData = unknown> = {
   generateStaticParams?: () => StaticParams | Promise<StaticParams>;
   data?: (ctx: DataContext) => TData | Promise<TData>;
-  render: (ctx: RenderContext<TData>) => any;
+  render: (ctx: RenderContext<TData>) => string | Promise<string>;
 };
 
-export declare function definePage<T extends (ctx: PageContext) => any>(fn: T): T;
-export declare function defineData<T extends (ctx: DataContext) => any>(fn: T): T;
+export declare function definePage<
+  T extends (ctx: PageContext) => string | Promise<string>
+>(fn: T): T;
+
+export declare function defineData<
+  T extends (ctx: DataContext) => unknown | Promise<unknown>
+>(fn: T): T;
+
 export declare function defineStaticParams<
   T extends () => StaticParams | Promise<StaticParams>
 >(fn: T): T;
+
 export declare function definePageModule<TData>(
   mod: PageModule<TData>
 ): PageModule<TData>;
