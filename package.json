@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-html-pages",
-  "version": "1.6.0",
+  "version": "1.6.8",
   "author": "Paul Browne",
   "type": "module",
   "license": "MIT",
@@ -42,6 +42,10 @@
       "types": "./dist/page.d.ts",
       "import": "./dist/page.js"
     },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    },
     "./jsx-runtime": {
       "types": "./dist/jsx-runtime.d.ts",
       "import": "./dist/jsx-runtime.js"
@@ -59,7 +63,17 @@
     "test:preview": "vite preview"
   },
   "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18",
     "vite": ">=5"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
   },
   "dependencies": {
     "esbuild": "^0.24.0",
@@ -72,6 +86,8 @@
   },
   "devDependencies": {
     "@types/node": "^20.17.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "tsup": "^8.3.6",
     "typescript": "^5.7.3",
     "vite": "^6.4.1"

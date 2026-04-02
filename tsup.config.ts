@@ -20,6 +20,11 @@ export default defineConfig({
     'p-limit',
     'esbuild',
     'javascript-to-html',
+    'react',
+    'react/jsx-runtime',
+    'react/jsx-dev-runtime',
+    'react-dom',
+    'react-dom/server',
   ],
-  tsconfig: './tsconfig.json'
+  tsconfig: './tsconfig.json',
 });

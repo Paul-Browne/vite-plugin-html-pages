@@ -22,6 +22,11 @@ export interface HtPageInfo {
   params: HtPageParams;
 }
 
+export type HtPageRenderResult = string | unknown;
+export type HtPageRenderResultAsync =
+  | HtPageRenderResult
+  | Promise<HtPageRenderResult>;
+
 export type HtPageRenderContext = {
   page: HtPageInfo;
   params: HtPageParams;
@@ -35,7 +40,7 @@ export interface HtStructuredPageModule<TData = unknown> {
     params: HtPageParams;
     data?: TData;
     dev: boolean;
-  }) => string | Promise<string>;
+  }) => HtPageRenderResultAsync;
   data?: (ctx: {
     page: HtPageInfo;
     params: HtPageParams;
@@ -55,7 +60,7 @@ export interface HtPageModule {
         params: HtPageParams;
         data?: unknown;
         dev: boolean;
-      }) => string | Promise<string>)
+      }) => HtPageRenderResultAsync)
     | string
     | HtStructuredPageModule;
   data?: (ctx: {

@@ -49,48 +49,50 @@ function paramsTypeFromDefinitions(paramDefinitions) {
 function pageHelperModuleSource(page) {
   const paramsType = paramsTypeFromDefinitions(page.paramDefinitions ?? []);
   return `export type PageParams = ${paramsType};
-
-export type StaticParams = PageParams[];
-
-export type DataContext = {
-  params: PageParams;
-  dev: boolean;
-};
-
-export type RenderContext<TData = unknown> = {
-  params: PageParams;
-  data: TData;
-  dev: boolean;
-};
-
-export type PageContext<TData = unknown> = {
-  params: PageParams;
-  data?: TData;
-  dev: boolean;
-};
-
-export type PageModule<TData = unknown> = {
-  generateStaticParams?: () => StaticParams | Promise<StaticParams>;
-  data?: (ctx: DataContext) => TData | Promise<TData>;
-  render: (ctx: RenderContext<TData>) => string | Promise<string>;
-};
-
-export declare function definePage<
-  T extends (ctx: PageContext) => string | Promise<string>
->(fn: T): T;
-
-export declare function defineData<
-  T extends (ctx: DataContext) => unknown | Promise<unknown>
->(fn: T): T;
-
-export declare function defineStaticParams<
-  T extends () => StaticParams | Promise<StaticParams>
->(fn: T): T;
-
-export declare function definePageModule<TData>(
-  mod: PageModule<TData>
-): PageModule<TData>;
-`;
+  
+  export type StaticParams = PageParams[];
+  
+  export type DataContext = {
+    params: PageParams;
+    dev: boolean;
+  };
+  
+  export type RenderContext<TData = unknown> = {
+    params: PageParams;
+    data: TData;
+    dev: boolean;
+  };
+  
+  export type PageContext<TData = unknown> = {
+    params: PageParams;
+    data?: TData;
+    dev: boolean;
+  };
+  
+  export type RenderResult = unknown;
+  
+  export type PageModule<TData = unknown> = {
+    generateStaticParams?: () => StaticParams | Promise<StaticParams>;
+    data?: (ctx: DataContext) => TData | Promise<TData>;
+    render: (ctx: RenderContext<TData>) => RenderResult | Promise<RenderResult>;
+  };
+  
+  export declare function definePage<
+    T extends (ctx: PageContext) => RenderResult | Promise<RenderResult>
+  >(fn: T): T;
+  
+  export declare function defineData<
+    T extends (ctx: DataContext) => unknown | Promise<unknown>
+  >(fn: T): T;
+  
+  export declare function defineStaticParams<
+    T extends () => StaticParams | Promise<StaticParams>
+  >(fn: T): T;
+  
+  export declare function definePageModule<TData>(
+    mod: PageModule<TData>
+  ): PageModule<TData>;
+  `;
 }
 function stripPageExtension(filePath) {
   return filePath.replace(/\.(ht|html)\.(js|ts|jsx|tsx)$/i, "");
@@ -420,8 +422,9 @@ import path5 from "path";
 
 // src/errors.ts
 function invalidHtmlReturn(page, value) {
+  const type = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
   return new Error(
-    `[${PLUGIN_NAME}] Page "${page.relativePath}" must resolve to an HTML string, got ${typeof value}`
+    `[vite-plugin-html-pages] ${page.relativePath}: page render must return a string or a JSX/React renderable value, but received ${type}.`
   );
 }
 function missingDefaultExport(page) {
@@ -443,7 +446,113 @@ ${cause.stack}`;
   return new Error(`${message}: ${String(cause)}`);
 }
 
+// src/react-static-validation.ts
+var warnedKeys = /* @__PURE__ */ new Set();
+function warnOnce(key, message, onWarn) {
+  if (warnedKeys.has(key)) return;
+  warnedKeys.add(key);
+  onWarn(message);
+}
+function isEventProp(name) {
+  return /^on[A-Z]/.test(name);
+}
+function getElementName(type) {
+  if (typeof type === "string") {
+    return `<${type}>`;
+  }
+  if (typeof type === "function") {
+    const maybeNamed = type;
+    return maybeNamed.displayName || maybeNamed.name || "AnonymousComponent";
+  }
+  return "UnknownElement";
+}
+async function validateStaticJsxTree(node, ctx) {
+  const react = await import("react");
+  const { isValidElement } = react;
+  function inspectElement(el) {
+    const props = el.props ?? {};
+    for (const [key, value] of Object.entries(props)) {
+      if (!isEventProp(key)) continue;
+      if (typeof value !== "function") continue;
+      const elementName = getElementName(el.type);
+      warnOnce(
+        `${ctx.page.routePath}:${elementName}:${key}`,
+        `[vite-plugin-html-pages] ${ctx.page.relativePath ?? ctx.page.routePath}: prop "${key}" on ${elementName} will not be interactive in static TSX/JSX output. Use a client script or future hydration/islands support instead.`,
+        ctx.onWarn
+      );
+    }
+  }
+  function walk(value) {
+    if (value == null || typeof value === "boolean") return;
+    if (typeof value === "string" || typeof value === "number") return;
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        walk(child);
+      }
+      return;
+    }
+    if (!isValidElement(value)) return;
+    inspectElement(value);
+    walk(value.props?.children);
+  }
+  walk(node);
+}
+
 // src/render-runtime.ts
+function isStructuredPageModule(value) {
+  return typeof value === "object" && value !== null && "render" in value && typeof value.render === "function";
+}
+function ensureDoctype(html) {
+  const trimmed = html.trimStart();
+  if (/^<!doctype html>/i.test(trimmed)) {
+    return html;
+  }
+  if (/^<html[\s>]/i.test(trimmed)) {
+    return "<!DOCTYPE html>" + html;
+  }
+  return html;
+}
+async function isRenderableReactResult(value) {
+  try {
+    const react = await import("react");
+    return value == null || typeof value === "string" || typeof value === "number" || typeof value === "boolean" || Array.isArray(value) || react.isValidElement(value);
+  } catch {
+    return false;
+  }
+}
+async function renderReactResult(value) {
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  return renderToStaticMarkup(value);
+}
+async function resolveRenderResult(page, mod, ctx) {
+  const entry = mod.default;
+  if (entry == null) {
+    throw missingDefaultExport(page);
+  }
+  if (typeof entry === "string") {
+    return entry;
+  }
+  if (typeof entry === "function") {
+    return await entry(ctx);
+  }
+  if (isStructuredPageModule(entry)) {
+    if (typeof entry.data === "function") {
+      ctx.data = await entry.data(ctx);
+    }
+    return await entry.render(ctx);
+  }
+  throw invalidHtmlReturn(page, entry);
+}
+async function ensureReactAvailable(page) {
+  try {
+    await import("react");
+    await import("react-dom/server");
+  } catch {
+    throw new Error(
+      `[vite-plugin-html-pages] ${page.relativePath}: TSX/JSX page rendering requires "react" and "react-dom" to be installed in the consuming app.`
+    );
+  }
+}
 async function renderPage(page, mod, dev = false) {
   const ctx = {
     page,
@@ -454,15 +563,25 @@ async function renderPage(page, mod, dev = false) {
     if (typeof mod.data === "function") {
       ctx.data = await mod.data(ctx);
     }
-    const entry = mod.default;
-    if (entry == null) {
-      throw missingDefaultExport(page);
+    const result = await resolveRenderResult(page, mod, ctx);
+    if (typeof result === "string") {
+      return ensureDoctype(result);
     }
-    const html = typeof entry === "function" ? await entry(ctx) : entry;
-    if (typeof html !== "string") {
-      throw invalidHtmlReturn(page, html);
+    await ensureReactAvailable(page);
+    const looksReactRenderable = await isRenderableReactResult(result);
+    if (!looksReactRenderable) {
+      throw invalidHtmlReturn(page, result);
     }
-    return html;
+    if (dev) {
+      await validateStaticJsxTree(result, {
+        page,
+        onWarn(message) {
+          console.warn(message);
+        }
+      });
+    }
+    const html = await renderReactResult(result);
+    return ensureDoctype(html);
   } catch (error) {
     throw pageError(page, error);
   }
@@ -542,7 +661,7 @@ export function definePageModule<TData>(
 
 // src/module-loader.ts
 var buildServer = null;
-function isStructuredPageModule(value) {
+function isStructuredPageModule2(value) {
   return !!value && typeof value === "object" && "render" in value && typeof value.render === "function";
 }
 function isLocalPageTypesImport(id) {
@@ -550,7 +669,7 @@ function isLocalPageTypesImport(id) {
 }
 function normalizeLoadedPageModule(mod) {
   const pageModule = mod ?? {};
-  if (isStructuredPageModule(pageModule.default)) {
+  if (isStructuredPageModule2(pageModule.default)) {
     const structured = pageModule.default;
     return {
       default: structured.render,
@@ -649,6 +768,15 @@ async function closePageModuleLoader() {
 function isStaticAssetRequest(url) {
   return url.endsWith(".css") || url.endsWith(".js") || url.endsWith(".mjs") || url.endsWith(".ts") || url.endsWith(".png") || url.endsWith(".jpg") || url.endsWith(".jpeg") || url.endsWith(".gif") || url.endsWith(".svg") || url.endsWith(".webp") || url.endsWith(".ico") || url.endsWith(".woff") || url.endsWith(".woff2") || url.endsWith(".ttf") || url.endsWith(".otf");
 }
+function normalizeRoutePath2(input) {
+  let value = input.split("?")[0].split("#")[0];
+  if (!value.startsWith("/")) value = "/" + value;
+  value = value.replace(/\/+/g, "/");
+  if (value.length > 1 && value.endsWith("/")) {
+    value = value.slice(0, -1);
+  }
+  return value;
+}
 function shouldSkipHtmlRouting(url, pagesDir) {
   return url.startsWith("/@vite") || url.startsWith("/@fs/") || url.startsWith("/node_modules/") || url.startsWith(`/${pagesDir}/`) || url === "/favicon.ico" || isStaticAssetRequest(url);
 }
@@ -662,15 +790,17 @@ function tryRewriteRootAssetToSrc(root, pagesDir, url) {
   }
   return null;
 }
-function shouldUseDynamicRendering(mod) {
-  return mod.dynamic === true || mod.prerender === false;
-}
 function installDevServer(args) {
   const { server, root, pagesDir, getPages } = args;
+  const loadModulePromise = createPageModuleLoader({
+    mode: "dev",
+    root,
+    server
+  });
   server.middlewares.use(async (req, res, next) => {
     try {
       const originalUrl = req.url ?? "/";
-      const url = originalUrl.split("?")[0];
+      const url = normalizeRoutePath2(originalUrl);
       const rewrittenAssetUrl = tryRewriteRootAssetToSrc(root, pagesDir, url);
       if (rewrittenAssetUrl) {
         req.url = rewrittenAssetUrl + originalUrl.slice(url.length);
@@ -680,20 +810,15 @@ function installDevServer(args) {
         return next();
       }
       const pages = await getPages();
-      const page = pages.find((p) => p.routePath === url);
+      const page = pages.find(
+        (p) => normalizeRoutePath2(p.routePath) === url
+      );
       if (!page) {
         return next();
       }
-      const loadModule = await createPageModuleLoader({
-        mode: "dev",
-        root,
-        server
-      });
+      const loadModule = await loadModulePromise;
       const mod = await loadModule(page.entryPath, page.relativePath);
       if (!mod) {
-        return next();
-      }
-      if (!shouldUseDynamicRendering(mod) && page.dynamic) {
         return next();
       }
       const html = await renderPage(page, mod, true);

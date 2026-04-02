@@ -20,6 +20,8 @@ interface HtPageInfo {
     paramDefinitions: RouteParamDefinition[];
     params: HtPageParams;
 }
+type HtPageRenderResult = string | unknown;
+type HtPageRenderResultAsync = HtPageRenderResult | Promise<HtPageRenderResult>;
 type HtPageRenderContext = {
     page: HtPageInfo;
     params: HtPageParams;
@@ -32,7 +34,7 @@ interface HtStructuredPageModule<TData = unknown> {
         params: HtPageParams;
         data?: TData;
         dev: boolean;
-    }) => string | Promise<string>;
+    }) => HtPageRenderResultAsync;
     data?: (ctx: {
         page: HtPageInfo;
         params: HtPageParams;
@@ -48,7 +50,7 @@ interface HtPageModule {
         params: HtPageParams;
         data?: unknown;
         dev: boolean;
-    }) => string | Promise<string>) | string | HtStructuredPageModule;
+    }) => HtPageRenderResultAsync) | string | HtStructuredPageModule;
     data?: (ctx: {
         page: HtPageInfo;
         params: HtPageParams;

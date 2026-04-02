@@ -1,11 +1,16 @@
 import type { HtPageInfo } from './types';
 import { PLUGIN_NAME } from './constants';
-export function invalidHtmlReturn(
-  page: HtPageInfo,
-  value: unknown,
-): Error {
+
+export function invalidHtmlReturn(page: HtPageInfo, value: unknown): Error {
+  const type =
+    value === null
+      ? 'null'
+      : Array.isArray(value)
+        ? 'array'
+        : typeof value;
+
   return new Error(
-    `[${PLUGIN_NAME}] Page "${page.relativePath}" must resolve to an HTML string, got ${typeof value}`,
+    `[vite-plugin-html-pages] ${page.relativePath}: page render must return a string or a JSX/React renderable value, but received ${type}.`,
   );
 }
 

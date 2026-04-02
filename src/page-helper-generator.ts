@@ -22,7 +22,7 @@ function paramsTypeFromDefinitions(
   return `{ ${fields.join('; ')} }`;
 }
 
-export function generateTypedPageHelper(page: HtPageInfo | undefined): string {
+export function generateTypedPageHelper(page?: HtPageInfo): string {
   const paramsType = page
     ? paramsTypeFromDefinitions(page.paramDefinitions ?? [])
     : '{}';
