@@ -307,7 +307,7 @@ export {
         jsxImportSource: 'vite-plugin-html-pages',
         sourcemap: true,
         sourcefile: normalizedId,
-        target: 'es2020',
+        target: 'esnext',
       });
 
       return {

@@ -121,7 +121,7 @@ export async function buildProcessedStaticAssets(args: {
       minify,
       sourcemap,
       format: 'esm',
-      target: 'es2020',
+      target: 'esnext',
       platform: 'browser',
       write: false,
       entryNames: '[dir]/[name]',
