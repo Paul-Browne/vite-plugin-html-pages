@@ -790,6 +790,18 @@ function tryRewriteRootAssetToSrc(root, pagesDir, url) {
   }
   return null;
 }
+function rewriteRootAssetUrlsInDevHtml(html, root, pagesDir) {
+  return html.replace(
+    /\b(href|src)=["'](\/[^"']+)["']/g,
+    (full, attr, url) => {
+      if (!isStaticAssetRequest(url)) return full;
+      if (url.startsWith(`/${pagesDir}/`)) return full;
+      const candidate = path5.join(root, pagesDir, url.slice(1));
+      if (!fs2.existsSync(candidate)) return full;
+      return `${attr}="/${pagesDir}/${url.slice(1)}"`;
+    }
+  );
+}
 function installDevServer(args) {
   const { server, root, pagesDir, getPages } = args;
   const loadModulePromise = createPageModuleLoader({
@@ -822,9 +834,14 @@ function installDevServer(args) {
         return next();
       }
       const html = await renderPage(page, mod, true);
+      const devHtml = rewriteRootAssetUrlsInDevHtml(
+        html,
+        root,
+        pagesDir
+      );
       const transformedHtml = await server.transformIndexHtml(
         url,
-        html,
+        devHtml,
         req.originalUrl
       );
       res.statusCode = 200;
@@ -1081,7 +1098,7 @@ async function buildProcessedStaticAssets(args) {
     minify,
     sourcemap,
     format: "esm",
-    target: "es2020",
+    target: "esnext",
     platform: "browser",
     write: false,
     entryNames: "[dir]/[name]",
@@ -1358,7 +1375,7 @@ export {
         jsxImportSource: "vite-plugin-html-pages",
         sourcemap: true,
         sourcefile: normalizedId,
-        target: "es2020"
+        target: "esnext"
       });
       return {
         code: result.code,
