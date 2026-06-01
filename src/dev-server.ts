@@ -69,6 +69,26 @@ function tryRewriteRootAssetToSrc(
   return null;
 }
 
+function rewriteRootAssetUrlsInDevHtml(
+  html: string,
+  root: string,
+  pagesDir: string,
+): string {
+  return html.replace(
+    /\b(href|src)=["'](\/[^"']+)["']/g,
+    (full, attr: string, url: string) => {
+      if (!isStaticAssetRequest(url)) return full;
+      if (url.startsWith(`/${pagesDir}/`)) return full;
+
+      const candidate = path.join(root, pagesDir, url.slice(1));
+
+      if (!fs.existsSync(candidate)) return full;
+
+      return `${attr}="/${pagesDir}/${url.slice(1)}"`;
+    },
+  );
+}
+
 export function installDevServer(args: {
   server: ViteDevServer;
   root: string;
@@ -115,9 +135,16 @@ export function installDevServer(args: {
       }
 
       const html = await renderPage(page, mod, true);
+
+      const devHtml = rewriteRootAssetUrlsInDevHtml(
+        html,
+        root,
+        pagesDir,
+      );
+      
       const transformedHtml = await server.transformIndexHtml(
         url,
-        html,
+        devHtml,
         req.originalUrl,
       );
 
