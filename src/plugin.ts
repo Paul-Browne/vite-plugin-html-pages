@@ -370,7 +370,35 @@ export {
       if (!watcherAttached) {
         watcherAttached = true;
 
-        const reload = async (file: string) => {
+        const reloadAfterChange = async (file: string): Promise<void> => {
+          logDebug(options.debug, 'file changed', file);
+
+          try {
+            await loadDevPages();
+
+            server?.ws.send({
+              type: 'full-reload',
+              path: '*',
+            });
+          } catch (error) {
+            if (error instanceof Error) {
+              server?.ssrFixStacktrace(error);
+            }
+
+            server?.config.logger.error(
+              `[${PLUGIN_NAME}] page reload failed: ${
+                error instanceof Error
+                  ? error.stack ?? error.message
+                  : String(error)
+              }`,
+            );
+
+            // Deliberately do not rethrow. The dev server stays alive and
+            // retries automatically on the next file change.
+          }
+        };
+
+        const reload = (file: string): void => {
           if (
             !file.includes(`${path.sep}${pagesDir}${path.sep}`) &&
             !file.includes(`/${pagesDir}/`)
@@ -378,14 +406,7 @@ export {
             return;
           }
 
-          logDebug(options.debug, 'file changed', file);
-
-          await loadDevPages();
-
-          server?.ws.send({
-            type: 'full-reload',
-            path: '*',
-          });
+          void reloadAfterChange(file);
         };
 
         server.watcher.on('add', reload);

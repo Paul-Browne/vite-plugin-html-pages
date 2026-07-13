@@ -1426,16 +1426,28 @@ export {
       });
       if (!watcherAttached) {
         watcherAttached = true;
-        const reload = async (file) => {
+        const reloadAfterChange = async (file) => {
+          logDebug(options.debug, "file changed", file);
+          try {
+            await loadDevPages();
+            server?.ws.send({
+              type: "full-reload",
+              path: "*"
+            });
+          } catch (error) {
+            if (error instanceof Error) {
+              server?.ssrFixStacktrace(error);
+            }
+            server?.config.logger.error(
+              `[${PLUGIN_NAME}] page reload failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
+            );
+          }
+        };
+        const reload = (file) => {
           if (!file.includes(`${path8.sep}${pagesDir}${path8.sep}`) && !file.includes(`/${pagesDir}/`)) {
             return;
           }
-          logDebug(options.debug, "file changed", file);
-          await loadDevPages();
-          server?.ws.send({
-            type: "full-reload",
-            path: "*"
-          });
+          void reloadAfterChange(file);
         };
         server.watcher.on("add", reload);
         server.watcher.on("change", reload);
