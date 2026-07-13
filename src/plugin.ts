@@ -381,18 +381,20 @@ export {
               path: '*',
             });
           } catch (error) {
-            if (error instanceof Error) {
-              server?.ssrFixStacktrace(error);
+            const err = error instanceof Error ? error : new Error(String(error));
+            if (options.debug && err.stack) {
+              server?.config.logger.error(err.stack);
+            } else {
+              server?.config.logger.error(
+                [
+                  `[${PLUGIN_NAME}] Page reload failed`,
+                  '',
+                  `${err.name}: ${err.message}`,
+                  '',
+                  'Watching for file changes...',
+                ].join('\n'),
+              );
             }
-
-            server?.config.logger.error(
-              `[${PLUGIN_NAME}] page reload failed: ${
-                error instanceof Error
-                  ? error.stack ?? error.message
-                  : String(error)
-              }`,
-            );
-
             // Deliberately do not rethrow. The dev server stays alive and
             // retries automatically on the next file change.
           }
