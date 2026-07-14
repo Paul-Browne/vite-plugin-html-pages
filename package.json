@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-html-pages",
-  "version": "1.7.3",
+  "version": "1.7.6",
   "author": "Paul Browne",
   "type": "module",
   "license": "MIT",
@@ -90,6 +90,6 @@
     "@types/react-dom": "^19.2.3",
     "tsup": "^8.3.6",
     "typescript": "^5.7.3",
-    "vite": "^6.4.1"
+    "vite": "^8.1.4"
   }
 }

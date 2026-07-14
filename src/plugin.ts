@@ -380,23 +380,11 @@ export {
               type: 'full-reload',
               path: '*',
             });
-          } catch (error) {
-            const err = error instanceof Error ? error : new Error(String(error));
-            if (options.debug && err.stack) {
-              server?.config.logger.error(err.stack);
-            } else {
-              server?.config.logger.error(
-                [
-                  `[${PLUGIN_NAME}] Page reload failed`,
-                  '',
-                  `${err.name}: ${err.message}`,
-                  '',
-                  'Watching for file changes...',
-                ].join('\n'),
-              );
-            }
-            // Deliberately do not rethrow. The dev server stays alive and
-            // retries automatically on the next file change.
+          } catch {
+            server?.config.logger.info(
+              `[${PLUGIN_NAME}] Page reload failed — watching for file changes...`,
+            );
+            // Do not rethrow. The next save retries automatically.            
           }
         };
 
@@ -417,10 +405,8 @@ export {
       }
 
       loadDevPages().catch((error) => {
-        server?.config.logger.error(
-          `[${PLUGIN_NAME}] loadDevPages failed: ${
-            error instanceof Error ? error.stack ?? error.message : String(error)
-          }`,
+        server?.config.logger.info(
+          `[${PLUGIN_NAME}] Page load failed — watching for file changes...`,
         );
       });
     },

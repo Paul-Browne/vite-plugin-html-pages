@@ -1434,21 +1434,10 @@ export {
               type: "full-reload",
               path: "*"
             });
-          } catch (error) {
-            const err = error instanceof Error ? error : new Error(String(error));
-            if (options.debug && err.stack) {
-              server?.config.logger.error(err.stack);
-            } else {
-              server?.config.logger.error(
-                [
-                  `[${PLUGIN_NAME}] Page reload failed`,
-                  "",
-                  `${err.name}: ${err.message}`,
-                  "",
-                  "Watching for file changes..."
-                ].join("\n")
-              );
-            }
+          } catch {
+            server?.config.logger.info(
+              `[${PLUGIN_NAME}] Page reload failed \u2014 watching for file changes...`
+            );
           }
         };
         const reload = (file) => {
@@ -1462,8 +1451,8 @@ export {
         server.watcher.on("unlink", reload);
       }
       loadDevPages().catch((error) => {
-        server?.config.logger.error(
-          `[${PLUGIN_NAME}] loadDevPages failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
+        server?.config.logger.info(
+          `[${PLUGIN_NAME}] Page load failed \u2014 watching for file changes...`
         );
       });
     },

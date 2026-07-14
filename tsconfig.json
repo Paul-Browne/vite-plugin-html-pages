@@ -9,9 +9,8 @@
     "rootDir": "src",
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "types": ["node"],
-    "jsx": "react-jsx",
-    "jsxImportSource": "vite-plugin-html-pages"
+    "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["dist", "node_modules"]
 }
