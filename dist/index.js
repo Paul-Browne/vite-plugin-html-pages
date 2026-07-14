@@ -589,7 +589,10 @@ async function renderPage(page, mod, dev = false) {
 
 // src/module-loader.ts
 import path4 from "path";
-import { createServer } from "vite";
+import {
+  createServer,
+  isRunnableDevEnvironment
+} from "vite";
 
 // src/page-helper-generator.ts
 function paramsTypeFromDefinitions2(paramDefinitions) {
@@ -661,6 +664,16 @@ export function definePageModule<TData>(
 
 // src/module-loader.ts
 var buildServer = null;
+async function importPageModule(server, url) {
+  const environment = server.environments.ssr;
+  if (!isRunnableDevEnvironment(environment)) {
+    throw new Error(
+      "[vite-plugin-html-pages] The Vite SSR environment is not runnable. A RunnableDevEnvironment is required to evaluate page modules."
+    );
+  }
+  const mod = await environment.runner.import(url);
+  return normalizeLoadedPageModule(mod);
+}
 function isStructuredPageModule2(value) {
   return !!value && typeof value === "object" && "render" in value && typeof value.render === "function";
 }
@@ -687,10 +700,7 @@ async function createPageModuleLoader(args) {
     if (!server) {
       throw new Error("[vite-plugin-html-pages] dev server not available");
     }
-    return async (_entryPath, relativePath) => {
-      const mod = await server.ssrLoadModule(`/${relativePath}`);
-      return normalizeLoadedPageModule(mod);
-    };
+    return async (_entryPath, relativePath) => importPageModule(server, `/${relativePath}`);
   }
   if (!getPages) {
     throw new Error(
@@ -753,8 +763,7 @@ export {
   }
   return async (entryPath) => {
     const relativePath = "/" + path4.relative(root, entryPath).replace(/\\/g, "/");
-    const mod = await buildServer.ssrLoadModule(relativePath);
-    return normalizeLoadedPageModule(mod);
+    return importPageModule(buildServer, relativePath);
   };
 }
 async function closePageModuleLoader() {

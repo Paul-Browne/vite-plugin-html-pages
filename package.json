@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-html-pages",
-  "version": "1.7.6",
+  "version": "2.0.0",
   "author": "Paul Browne",
   "type": "module",
   "license": "MIT",
@@ -65,7 +65,7 @@
   "peerDependencies": {
     "react": ">=18",
     "react-dom": ">=18",
-    "vite": ">=5"
+    "vite": ">=8"
   },
   "peerDependenciesMeta": {
     "react": {
