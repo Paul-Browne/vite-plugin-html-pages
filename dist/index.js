@@ -727,7 +727,8 @@ async function renderPage(page, mod, dev = false) {
 import path5 from "path";
 import {
   createServer,
-  isRunnableDevEnvironment
+  isRunnableDevEnvironment,
+  loadConfigFromFile
 } from "vite";
 
 // src/page-helper-generator.ts
@@ -799,7 +800,6 @@ export function definePageModule<TData>(
 }
 
 // src/module-loader.ts
-var buildServer = null;
 async function importPageModule(server, url) {
   const environment = server.environments.ssr;
   if (!isRunnableDevEnvironment(environment)) {
@@ -830,47 +830,52 @@ function normalizeLoadedPageModule(mod) {
   }
   return pageModule;
 }
-async function createPageModuleLoader(args) {
-  const { mode, root, server, getPages } = args;
-  if (mode === "dev") {
-    if (!server) {
-      throw new Error("[vite-plugin-html-pages] dev server not available");
-    }
-    return async (_entryPath, relativePath) => importPageModule(server, `/${relativePath}`);
-  }
-  if (!getPages) {
-    throw new Error(
-      "[vite-plugin-html-pages] getPages is required in build mode"
+async function flattenPluginOptions(option) {
+  const resolved = await option;
+  if (!resolved) return [];
+  if (Array.isArray(resolved)) {
+    const nested = await Promise.all(
+      resolved.map((entry) => flattenPluginOptions(entry))
     );
+    return nested.flat();
   }
-  if (!buildServer) {
-    const config = {
-      root,
-      configFile: false,
-      logLevel: "error",
-      appType: "custom",
-      esbuild: {
-        jsx: "automatic",
-        jsxImportSource: "vite-plugin-html-pages"
-      },
-      server: {
-        middlewareMode: true
-      },
-      plugins: [
-        {
-          name: "vite-plugin-html-pages:page-helper",
-          resolveId(id, importer) {
-            if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
-              return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
-            }
-            if (importer && isLocalPageTypesImport(id)) {
-              return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
-            }
-            return null;
-          },
-          async load(id) {
-            if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {
-              return `
+  return [resolved];
+}
+async function loadUserConfig(args) {
+  if (!args.configFile) {
+    return { userConfig: {}, userPlugins: [] };
+  }
+  const loaded = await loadConfigFromFile(
+    { command: "serve", mode: args.mode },
+    args.configFile,
+    args.root
+  );
+  if (!loaded) {
+    return { userConfig: {}, userPlugins: [] };
+  }
+  const plugins = await flattenPluginOptions(loaded.config.plugins);
+  return {
+    userConfig: loaded.config,
+    // Filter ourselves out so evaluating page modules does not
+    // recursively spawn more build loaders.
+    userPlugins: plugins.filter((plugin) => plugin.name !== PLUGIN_NAME)
+  };
+}
+function createPageHelperPlugin(getPages) {
+  return {
+    name: `${PLUGIN_NAME}:page-helper`,
+    resolveId(id, importer) {
+      if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
+        return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
+      }
+      if (importer && isLocalPageTypesImport(id)) {
+        return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
+      }
+      return null;
+    },
+    async load(id) {
+      if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {
+        return `
 export {
   definePage,
   defineData,
@@ -878,35 +883,72 @@ export {
   definePageModule
 } from 'vite-plugin-html-pages/page';
 `;
-            }
-            if (!id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
-              return null;
-            }
-            const importer = id.slice(
-              RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length
-            );
-            const pages = await getPages();
-            const normalizedImporter = path5.resolve(importer);
-            const page = pages.find(
-              (candidate) => path5.resolve(candidate.absolutePath) === normalizedImporter
-            );
-            return generateTypedPageHelper(page);
-          }
-        }
-      ]
-    };
-    buildServer = await createServer(config);
-  }
-  return async (entryPath) => {
-    const relativePath = "/" + path5.relative(root, entryPath).replace(/\\/g, "/");
-    return importPageModule(buildServer, relativePath);
+      }
+      if (!id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
+        return null;
+      }
+      const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
+      const pages = await getPages();
+      const normalizedImporter = path5.resolve(importer);
+      const page = pages.find(
+        (candidate) => path5.resolve(candidate.absolutePath) === normalizedImporter
+      );
+      return generateTypedPageHelper(page);
+    }
   };
 }
-async function closePageModuleLoader() {
-  if (buildServer) {
-    await buildServer.close();
-    buildServer = null;
+async function createPageModuleLoader(args) {
+  const { mode, root, server, getPages } = args;
+  if (mode === "dev") {
+    if (!server) {
+      throw new Error("[vite-plugin-html-pages] dev server not available");
+    }
+    return {
+      loadModule: async (_entryPath, relativePath) => importPageModule(server, `/${relativePath}`),
+      close: async () => {
+      }
+    };
   }
+  if (!getPages) {
+    throw new Error(
+      "[vite-plugin-html-pages] getPages is required in build mode"
+    );
+  }
+  const configMode = args.configMode ?? "production";
+  const { userConfig, userPlugins } = await loadUserConfig({
+    root,
+    configFile: args.configFile,
+    mode: configMode
+  });
+  const config = {
+    ...userConfig,
+    root,
+    mode: configMode,
+    configFile: false,
+    logLevel: "error",
+    appType: "custom",
+    esbuild: userConfig.esbuild === false ? false : {
+      ...userConfig.esbuild,
+      jsx: "automatic",
+      jsxImportSource: PLUGIN_NAME
+    },
+    server: {
+      ...userConfig.server,
+      middlewareMode: true,
+      watch: null
+    },
+    plugins: [...userPlugins, createPageHelperPlugin(getPages)]
+  };
+  const buildServer = await createServer(config);
+  return {
+    loadModule: async (entryPath) => {
+      const relativePath = "/" + path5.relative(root, entryPath).replace(/\\/g, "/");
+      return importPageModule(buildServer, relativePath);
+    },
+    close: async () => {
+      await buildServer.close();
+    }
+  };
 }
 
 // src/dev-server.ts
@@ -949,7 +991,7 @@ function rewriteRootAssetUrlsInDevHtml(html, root, pagesDir) {
 }
 function installDevServer(args) {
   const { server, root, pagesDir, getPages } = args;
-  const loadModulePromise = createPageModuleLoader({
+  const loaderPromise = createPageModuleLoader({
     mode: "dev",
     root,
     server
@@ -973,7 +1015,7 @@ function installDevServer(args) {
       if (!page) {
         return next();
       }
-      const loadModule = await loadModulePromise;
+      const { loadModule } = await loaderPromise;
       const mod = await loadModule(page.entryPath, page.relativePath);
       if (!mod) {
         return next();
@@ -1047,6 +1089,20 @@ function collectLiteralDynamicImports(html) {
 }
 function unique(values) {
   return [...new Set(values)];
+}
+function collectHrefSrcUrls(html) {
+  const out = [];
+  for (const match of html.matchAll(/\b(?:href|src)=["']([^"']+)["']/gi)) {
+    out.push(match[1]);
+  }
+  return out;
+}
+function collectLocalAssetUrls(html) {
+  const candidates = [
+    ...collectHrefSrcUrls(html),
+    ...collectLiteralDynamicImports(html)
+  ];
+  return unique(candidates.filter(isLocalRootUrl).map(stripQueryAndHash));
 }
 function formatPageLabel(pageLabel) {
   return pageLabel ? ` (${pageLabel})` : "";
@@ -1338,6 +1394,50 @@ function chunkArray(items, size) {
   }
   return out;
 }
+var DEFAULT_404_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>404 - Page Not Found</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+      }
+      main {
+        max-width: 40rem;
+        text-align: center;
+      }
+      h1 {
+        font-size: 3rem;
+        margin: 0 0 1rem;
+      }
+      p {
+        margin: 0.5rem 0;
+        line-height: 1.5;
+      }
+      a {
+        color: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>404</h1>
+      <p>Page not found.</p>
+      <p><a href="/">Go back home</a></p>
+    </main>
+  </body>
+</html>
+`;
 function isHtJsxFile(id) {
   return id.endsWith(".ht.jsx") || id.endsWith(".html.jsx") || id.endsWith(".ht.tsx") || id.endsWith(".html.tsx");
 }
@@ -1354,6 +1454,9 @@ function htPages(options = {}) {
   let server = null;
   let devPages = [];
   let watcherAttached = false;
+  let userConfigFile;
+  let resolvedMode = "production";
+  let buildPipelinePromise = null;
   const cleanUrls = options.cleanUrls ?? true;
   const pagesDir = options.pagesDir ?? "src";
   const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [
@@ -1384,13 +1487,13 @@ function htPages(options = {}) {
       entries.map((e) => e.relativePath)
     );
     if (!server) return [];
-    const loadModule = await createPageModuleLoader({
+    const loader = await createPageModuleLoader({
       mode: "dev",
       root,
       server
     });
     for (const entry of entries) {
-      const mod = await loadModule(entry.entryPath, entry.relativePath);
+      const mod = await loader.loadModule(entry.entryPath, entry.relativePath);
       modulesByEntry.set(entry.entryPath, mod);
     }
     devPages = await buildPageIndex({
@@ -1405,29 +1508,55 @@ function htPages(options = {}) {
     );
     return devPages;
   }
-  async function buildPagesPipeline() {
+  async function createBuildPipeline() {
     const entries = await discoverEntryPages(root, options);
     await writePageTypeDeclarations({
       root,
       pagesDir,
       entries
     });
-    const modulesByEntry = /* @__PURE__ */ new Map();
-    const loadModule = await createPageModuleLoader({
+    const loader = await createPageModuleLoader({
       mode: "build",
       root,
-      getPages: async () => entries
+      getPages: async () => entries,
+      configFile: userConfigFile,
+      configMode: resolvedMode
     });
-    for (const entry of entries) {
-      const mod = await loadModule(entry.entryPath, entry.relativePath);
-      modulesByEntry.set(entry.entryPath, mod);
+    try {
+      const modulesByEntry = /* @__PURE__ */ new Map();
+      for (const entry of entries) {
+        const mod = await loader.loadModule(
+          entry.entryPath,
+          entry.relativePath
+        );
+        modulesByEntry.set(entry.entryPath, mod);
+      }
+      const pages = await buildPageIndex({
+        entries,
+        modulesByEntry,
+        cleanUrls
+      });
+      return { entries, modulesByEntry, pages, closeLoader: loader.close };
+    } catch (error) {
+      await loader.close();
+      throw error;
     }
-    const pages = await buildPageIndex({
-      entries,
-      modulesByEntry,
-      cleanUrls
-    });
-    return { entries, modulesByEntry, pages };
+  }
+  function getBuildPipeline() {
+    if (!buildPipelinePromise) {
+      buildPipelinePromise = createBuildPipeline();
+    }
+    return buildPipelinePromise;
+  }
+  async function closeBuildPipeline() {
+    const pending = buildPipelinePromise;
+    buildPipelinePromise = null;
+    if (!pending) return;
+    try {
+      const pipeline = await pending;
+      await pipeline.closeLoader();
+    } catch {
+    }
   }
   return {
     name: PLUGIN_NAME,
@@ -1489,9 +1618,9 @@ export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
       }
       if (id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
         const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
-        const { pages } = await buildPagesPipeline();
+        const entries = await discoverEntryPages(root, options);
         const normalizedImporter = path9.resolve(importer);
-        const page = pages.find(
+        const page = entries.find(
           (candidate) => path9.resolve(candidate.absolutePath) === normalizedImporter
         );
         return generateTypedPageHelper(page);
@@ -1529,12 +1658,15 @@ export {
     },
     configResolved(resolved) {
       root = options.root ? path9.resolve(resolved.root, options.root) : resolved.root;
+      userConfigFile = resolved.configFile ?? void 0;
+      resolvedMode = resolved.mode;
       if (!hasWarnedESM) {
         warnIfNotESM(root);
         hasWarnedESM = true;
       }
     },
     async buildStart() {
+      await closeBuildPipeline();
       const entries = await discoverEntryPages(root, options);
       for (const entry of entries) {
         this.addWatchFile(entry.entryPath);
@@ -1613,51 +1745,15 @@ export {
     },
     async generateBundle(_, bundle) {
       try {
-        const { modulesByEntry, pages } = await buildPagesPipeline();
-        const staticAssets = await collectStaticAssets({
-          root,
-          pagesDir,
-          pageExtensions
-        });
+        const { modulesByEntry, pages } = await getBuildPipeline();
         logDebug(
           options.debug,
           "emitting pages",
           pages.map((p) => p.fileName)
         );
-        logDebug(
-          options.debug,
-          "emitting static assets",
-          staticAssets.map((asset) => ({
-            kind: asset.kind,
-            input: asset.relativePathFromSrc,
-            output: asset.outputFileName
-          }))
-        );
         const limit = pLimit(options.renderConcurrency ?? 8);
         const batchSize = options.renderBatchSize ?? Math.max(options.renderConcurrency ?? 8, 32);
-        const processedOutputs = await buildProcessedStaticAssets({
-          root,
-          pagesDir,
-          assets: staticAssets,
-          minify: true,
-          sourcemap: false
-        });
-        for (const [fileName, source] of processedOutputs) {
-          this.emitFile({
-            type: "asset",
-            fileName,
-            source
-          });
-        }
-        for (const asset of staticAssets) {
-          if (asset.kind !== "copy") continue;
-          const source = await copyStaticAssetSource(asset);
-          this.emitFile({
-            type: "asset",
-            fileName: asset.outputFileName,
-            source
-          });
-        }
+        const renderedPages = [];
         for (const batch of chunkArray(pages, batchSize)) {
           await Promise.all(
             batch.map(
@@ -1677,90 +1773,95 @@ export {
                   pageLabel: page.relativePath,
                   missingAssets: options.missingAssets ?? "error"
                 });
-                this.emitFile({
-                  type: "asset",
-                  fileName: options.mapOutputPath?.(page) ?? page.fileName,
-                  source: html
-                });
+                renderedPages.push({ page, html });
               })
             )
           );
         }
-        const notFoundPage = pages.find((p) => p.routePath === "/404");
-        if (notFoundPage) {
-          const mod = modulesByEntry.get(notFoundPage.entryPath);
-          if (!mod) {
-            throw new Error(
-              `[${PLUGIN_NAME}] Missing module for 404 page entry: ${notFoundPage.entryPath}`
-            );
+        const rendered404 = renderedPages.find(
+          (rendered) => rendered.page.routePath === "/404"
+        );
+        const notFoundHtml = rendered404?.html ?? DEFAULT_404_HTML;
+        logDebug(
+          options.debug,
+          rendered404 ? "generated 404.html from user page" : "generated default 404.html"
+        );
+        const referencedUrls = /* @__PURE__ */ new Set();
+        for (const { html } of renderedPages) {
+          for (const url of collectLocalAssetUrls(html)) {
+            referencedUrls.add(url);
           }
-          const html = await renderPage(notFoundPage, mod, false);
-          validateHtmlAssetReferences({
-            root,
-            pagesDir,
-            html,
-            pluginName: PLUGIN_NAME,
-            pageLabel: notFoundPage.relativePath,
-            missingAssets: options.missingAssets ?? "error"
-          });
+        }
+        for (const url of collectLocalAssetUrls(notFoundHtml)) {
+          referencedUrls.add(url);
+        }
+        const staticAssets = await collectStaticAssets({
+          root,
+          pagesDir,
+          pageExtensions
+        });
+        const isReferenced = (asset) => referencedUrls.has(`/${asset.outputFileName}`) || referencedUrls.has(`/${asset.relativePathFromSrc}`);
+        const processableAssets = [];
+        const skippedAssets = [];
+        for (const asset of staticAssets) {
+          if (asset.kind !== "process") continue;
+          if (isReferenced(asset)) {
+            processableAssets.push(asset);
+          } else {
+            skippedAssets.push(asset);
+          }
+        }
+        if (skippedAssets.length > 0) {
+          logDebug(
+            options.debug,
+            "skipping unreferenced code assets",
+            skippedAssets.map((asset) => asset.relativePathFromSrc)
+          );
+        }
+        logDebug(
+          options.debug,
+          "emitting static assets",
+          staticAssets.filter((asset) => asset.kind === "copy" || isReferenced(asset)).map((asset) => ({
+            kind: asset.kind,
+            input: asset.relativePathFromSrc,
+            output: asset.outputFileName
+          }))
+        );
+        const processedOutputs = await buildProcessedStaticAssets({
+          root,
+          pagesDir,
+          assets: processableAssets,
+          minify: true,
+          sourcemap: false
+        });
+        for (const [fileName, source] of processedOutputs) {
           this.emitFile({
             type: "asset",
-            fileName: "404.html",
+            fileName,
+            source
+          });
+        }
+        for (const asset of staticAssets) {
+          if (asset.kind !== "copy") continue;
+          const source = await copyStaticAssetSource(asset);
+          this.emitFile({
+            type: "asset",
+            fileName: asset.outputFileName,
+            source
+          });
+        }
+        for (const { page, html } of renderedPages) {
+          this.emitFile({
+            type: "asset",
+            fileName: options.mapOutputPath?.(page) ?? page.fileName,
             source: html
           });
-          logDebug(options.debug, "generated 404.html from user page");
-        } else {
-          const default404 = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>404 - Page Not Found</title>
-    <style>
-      :root {
-        color-scheme: light dark;
-      }
-      body {
-        margin: 0;
-        font-family: system-ui, sans-serif;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        padding: 2rem;
-      }
-      main {
-        max-width: 40rem;
-        text-align: center;
-      }
-      h1 {
-        font-size: 3rem;
-        margin: 0 0 1rem;
-      }
-      p {
-        margin: 0.5rem 0;
-        line-height: 1.5;
-      }
-      a {
-        color: inherit;
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>404</h1>
-      <p>Page not found.</p>
-      <p><a href="/">Go back home</a></p>
-    </main>
-  </body>
-</html>
-`;
-          this.emitFile({
-            type: "asset",
-            fileName: "404.html",
-            source: default404
-          });
-          logDebug(options.debug, "generated default 404.html");
         }
+        this.emitFile({
+          type: "asset",
+          fileName: "404.html",
+          source: notFoundHtml
+        });
         const sitemapBase = options.site ?? "";
         const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(
           (route) => !route.includes(":") && !route.includes("*")
@@ -1812,8 +1913,16 @@ ${rssItems}
           }
         }
       } finally {
-        await closePageModuleLoader();
+        await closeBuildPipeline();
       }
+    },
+    async buildEnd(error) {
+      if (error) {
+        await closeBuildPipeline();
+      }
+    },
+    async closeBundle() {
+      await closeBuildPipeline();
     }
   };
 }

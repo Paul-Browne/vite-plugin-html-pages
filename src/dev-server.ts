@@ -97,7 +97,7 @@ export function installDevServer(args: {
   getEntries?: () => Promise<HtPageInfo[]>;
 }) {
   const { server, root, pagesDir, getPages } = args;
-  const loadModulePromise = createPageModuleLoader({
+  const loaderPromise = createPageModuleLoader({
     mode: 'dev',
     root,
     server,
@@ -127,7 +127,7 @@ export function installDevServer(args: {
         return next();
       }
 
-      const loadModule = await loadModulePromise;
+      const { loadModule } = await loaderPromise;
       const mod = await loadModule(page.entryPath, page.relativePath);
 
       if (!mod) {

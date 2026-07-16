@@ -70,6 +70,30 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
+function collectHrefSrcUrls(html: string): string[] {
+  const out: string[] = [];
+
+  for (const match of html.matchAll(/\b(?:href|src)=["']([^"']+)["']/gi)) {
+    out.push(match[1]);
+  }
+
+  return out;
+}
+
+/**
+ * Collects every root-relative URL the HTML references (any href/src
+ * attribute plus literal dynamic imports), with query/hash stripped.
+ * Used to decide which source assets must be emitted at build time.
+ */
+export function collectLocalAssetUrls(html: string): string[] {
+  const candidates = [
+    ...collectHrefSrcUrls(html),
+    ...collectLiteralDynamicImports(html),
+  ];
+
+  return unique(candidates.filter(isLocalRootUrl).map(stripQueryAndHash));
+}
+
 function formatPageLabel(pageLabel?: string): string {
   return pageLabel ? ` (${pageLabel})` : '';
 }

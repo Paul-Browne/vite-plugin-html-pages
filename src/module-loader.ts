@@ -2,11 +2,16 @@ import path from 'node:path';
 import {
   createServer,
   isRunnableDevEnvironment,
+  loadConfigFromFile,
   type InlineConfig,
+  type Plugin,
+  type PluginOption,
+  type UserConfig,
   type ViteDevServer,
 } from 'vite';
 
 import {
+  PLUGIN_NAME,
   VIRTUAL_PAGE_HELPER_ID,
   RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX,
   VIRTUAL_LOCAL_TYPES_PREFIX,
@@ -23,7 +28,10 @@ export type PageModuleLoader = (
   relativePath: string,
 ) => Promise<HtPageModule>;
 
-let buildServer: ViteDevServer | null = null;
+export interface PageModuleLoaderHandle {
+  loadModule: PageModuleLoader;
+  close: () => Promise<void>;
+}
 
 async function importPageModule(
   server: ViteDevServer,
@@ -76,12 +84,107 @@ function normalizeLoadedPageModule(mod: unknown): HtPageModule {
   return pageModule;
 }
 
+async function flattenPluginOptions(option: PluginOption): Promise<Plugin[]> {
+  const resolved = await option;
+
+  if (!resolved) return [];
+
+  if (Array.isArray(resolved)) {
+    const nested = await Promise.all(
+      resolved.map((entry) => flattenPluginOptions(entry)),
+    );
+    return nested.flat();
+  }
+
+  return [resolved as Plugin];
+}
+
+async function loadUserConfig(args: {
+  root: string;
+  configFile: string | undefined;
+  mode: string;
+}): Promise<{ userConfig: UserConfig; userPlugins: Plugin[] }> {
+  if (!args.configFile) {
+    return { userConfig: {}, userPlugins: [] };
+  }
+
+  const loaded = await loadConfigFromFile(
+    { command: 'serve', mode: args.mode },
+    args.configFile,
+    args.root,
+  );
+
+  if (!loaded) {
+    return { userConfig: {}, userPlugins: [] };
+  }
+
+  const plugins = await flattenPluginOptions(loaded.config.plugins);
+
+  return {
+    userConfig: loaded.config,
+    // Filter ourselves out so evaluating page modules does not
+    // recursively spawn more build loaders.
+    userPlugins: plugins.filter((plugin) => plugin.name !== PLUGIN_NAME),
+  };
+}
+
+function createPageHelperPlugin(
+  getPages: () => Promise<HtPageInfo[]>,
+): Plugin {
+  return {
+    name: `${PLUGIN_NAME}:page-helper`,
+
+    resolveId(id, importer) {
+      if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
+        return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
+      }
+
+      if (importer && isLocalPageTypesImport(id)) {
+        return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
+      }
+
+      return null;
+    },
+
+    async load(id) {
+      if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {
+        return `
+export {
+  definePage,
+  defineData,
+  defineStaticParams,
+  definePageModule
+} from 'vite-plugin-html-pages/page';
+`;
+      }
+
+      if (!id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
+        return null;
+      }
+
+      const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
+
+      const pages = await getPages();
+      const normalizedImporter = path.resolve(importer);
+
+      const page = pages.find(
+        (candidate) =>
+          path.resolve(candidate.absolutePath) === normalizedImporter,
+      );
+
+      return generateTypedPageHelper(page);
+    },
+  };
+}
+
 export async function createPageModuleLoader(args: {
   mode: 'dev' | 'build';
   root: string;
   server?: ViteDevServer | null;
   getPages?: () => Promise<HtPageInfo[]>;
-}): Promise<PageModuleLoader> {
+  configFile?: string;
+  configMode?: string;
+}): Promise<PageModuleLoaderHandle> {
   const { mode, root, server, getPages } = args;
 
   if (mode === 'dev') {
@@ -89,8 +192,11 @@ export async function createPageModuleLoader(args: {
       throw new Error('[vite-plugin-html-pages] dev server not available');
     }
 
-    return async (_entryPath, relativePath) =>
-      importPageModule(server, `/${relativePath}`);
+    return {
+      loadModule: async (_entryPath, relativePath) =>
+        importPageModule(server, `/${relativePath}`),
+      close: async () => {},
+    };
   }
 
   if (!getPages) {
@@ -99,83 +205,50 @@ export async function createPageModuleLoader(args: {
     );
   }
 
-  if (!buildServer) {
-    const config: InlineConfig = {
-      root,
-      configFile: false,
-      logLevel: 'error',
-      appType: 'custom',
-      esbuild: {
-        jsx: 'automatic',
-        jsxImportSource: 'vite-plugin-html-pages',
-      },
-      server: {
-        middlewareMode: true,
-      },
-      plugins: [
-        {
-          name: 'vite-plugin-html-pages:page-helper',
+  const configMode = args.configMode ?? 'production';
 
-          resolveId(id, importer) {
-            if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
-              return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
-            }
+  // Load the user's Vite config so page modules are evaluated with the
+  // same aliases, defines, and plugins as in dev.
+  const { userConfig, userPlugins } = await loadUserConfig({
+    root,
+    configFile: args.configFile,
+    mode: configMode,
+  });
 
-            if (importer && isLocalPageTypesImport(id)) {
-              return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
-            }
-
-            return null;
+  const config: InlineConfig = {
+    ...userConfig,
+    root,
+    mode: configMode,
+    configFile: false,
+    logLevel: 'error',
+    appType: 'custom',
+    esbuild:
+      userConfig.esbuild === false
+        ? false
+        : {
+            ...userConfig.esbuild,
+            jsx: 'automatic',
+            jsxImportSource: PLUGIN_NAME,
           },
-
-          async load(id) {
-            if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {
-              return `
-export {
-  definePage,
-  defineData,
-  defineStaticParams,
-  definePageModule
-} from 'vite-plugin-html-pages/page';
-`;
-            }
-
-            if (!id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
-              return null;
-            }
-
-            const importer = id.slice(
-              RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length,
-            );
-
-            const pages = await getPages();
-            const normalizedImporter = path.resolve(importer);
-
-            const page = pages.find(
-              (candidate) =>
-                path.resolve(candidate.absolutePath) === normalizedImporter,
-            );
-
-            return generateTypedPageHelper(page);
-          },
-        },
-      ],
-    };
-
-    buildServer = await createServer(config);
-  }
-
-  return async (entryPath) => {
-    const relativePath =
-      '/' + path.relative(root, entryPath).replace(/\\/g, '/');
-
-      return importPageModule(buildServer!, relativePath);
+    server: {
+      ...userConfig.server,
+      middlewareMode: true,
+      watch: null,
+    },
+    plugins: [...userPlugins, createPageHelperPlugin(getPages)],
   };
-}
 
-export async function closePageModuleLoader(): Promise<void> {
-  if (buildServer) {
-    await buildServer.close();
-    buildServer = null;
-  }
+  const buildServer = await createServer(config);
+
+  return {
+    loadModule: async (entryPath) => {
+      const relativePath =
+        '/' + path.relative(root, entryPath).replace(/\\/g, '/');
+
+      return importPageModule(buildServer, relativePath);
+    },
+    close: async () => {
+      await buildServer.close();
+    },
+  };
 }

@@ -58,6 +58,7 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "test:dev": "vite",
     "test:build": "vite build",
     "test:preview": "vite preview"
@@ -91,6 +92,7 @@
     "@types/react-dom": "^19.2.3",
     "tsup": "^8.3.6",
     "typescript": "^5.7.3",
-    "vite": "^8.1.4"
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
   }
 }
