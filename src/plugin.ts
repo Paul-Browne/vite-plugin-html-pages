@@ -7,6 +7,7 @@ import pLimit from 'p-limit';
 import type { Plugin, ViteDevServer } from 'vite';
 
 import { writePageTypeDeclarations } from './typegen';
+import { formatDevPageError } from './format-dev-error';
 
 import {
   PLUGIN_NAME,
@@ -380,11 +381,17 @@ export {
               type: 'full-reload',
               path: '*',
             });
-          } catch {
-            server?.config.logger.info(
-              `[${PLUGIN_NAME}] Page reload failed — watching for file changes...`,
+          } catch (error) {          
+            server?.config.logger.error(
+              formatDevPageError({
+                error,
+                root,
+                phase: 'reload',
+                debug: options.debug,
+              }),
             );
-            // Do not rethrow. The next save retries automatically.            
+          
+            // Do not rethrow.
           }
         };
 
@@ -404,11 +411,17 @@ export {
         server.watcher.on('unlink', reload);
       }
 
-      loadDevPages().catch((error) => {
-        server?.config.logger.info(
-          `[${PLUGIN_NAME}] Page load failed — watching for file changes...`,
+      void loadDevPages().catch((error) => {
+        server?.config.logger.error(
+          formatDevPageError({
+            error,
+            root,
+            phase: 'load',
+            debug: options.debug,
+          }),
         );
-      });
+      }); 
+
     },
 
     async generateBundle(_, bundle) {

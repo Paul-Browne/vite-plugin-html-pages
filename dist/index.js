@@ -1,7 +1,7 @@
 // src/plugin.ts
-import fs5 from "fs";
-import path8 from "path";
-import { fileURLToPath, pathToFileURL } from "url";
+import fs6 from "fs";
+import path9 from "path";
+import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 import { transform as esbuildTransform } from "esbuild";
 import pLimit from "p-limit";
 
@@ -213,6 +213,142 @@ async function writePageTypeDeclarations(args) {
   });
 }
 
+// src/format-dev-error.ts
+import fs2 from "fs";
+import path3 from "path";
+import { fileURLToPath } from "url";
+import pc from "picocolors";
+function extractSourceLocation(error, root) {
+  const stack = error.stack ?? "";
+  for (const stackLine of stack.split("\n")) {
+    const match = stackLine.match(
+      /(?:\()?((?:file:\/\/\/)?[^()\n]+?):(\d+):(\d+)\)?\s*$/
+    );
+    if (!match) continue;
+    let file = match[1].trim();
+    file = file.replace(/^at\s+(?:.+?\s+\()?/, "");
+    file = file.split("?")[0].split("#")[0];
+    try {
+      if (file.startsWith("file://")) {
+        file = fileURLToPath(file);
+      } else {
+        file = decodeURIComponent(file);
+      }
+    } catch {
+      continue;
+    }
+    if (!path3.isAbsolute(file)) continue;
+    if (file.includes(`${path3.sep}node_modules${path3.sep}`)) continue;
+    const relativeFile = path3.relative(root, file);
+    if (relativeFile === ".." || relativeFile.startsWith(`..${path3.sep}`)) {
+      continue;
+    }
+    if (!fs2.existsSync(file)) continue;
+    return {
+      file,
+      line: Number(match[2]),
+      column: Number(match[3])
+    };
+  }
+  return null;
+}
+function refineReferenceErrorLocation(error, location) {
+  const match = error.message.match(
+    /^([A-Za-z_$][A-Za-z0-9_$]*) is not defined$/
+  );
+  if (!match || !fs2.existsSync(location.file)) {
+    return location;
+  }
+  const identifier = match[1];
+  const lines = fs2.readFileSync(location.file, "utf8").split(/\r?\n/);
+  const reportedIndex = location.line - 1;
+  const start = Math.max(0, reportedIndex - 2);
+  const end = Math.min(lines.length - 1, reportedIndex + 3);
+  const identifierPattern = new RegExp(
+    `\\b${identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`
+  );
+  let bestMatch;
+  for (let index = start; index <= end; index++) {
+    const column = lines[index].search(identifierPattern);
+    if (column === -1) continue;
+    const distance = Math.abs(index - reportedIndex);
+    if (!bestMatch || distance < bestMatch.distance) {
+      bestMatch = {
+        line: index + 1,
+        column: column + 1,
+        distance
+      };
+    }
+  }
+  if (!bestMatch) {
+    return location;
+  }
+  return {
+    ...location,
+    line: bestMatch.line,
+    column: bestMatch.column
+  };
+}
+function createSourceFrame(location, contextLines = 3) {
+  if (!fs2.existsSync(location.file)) return null;
+  const lines = fs2.readFileSync(location.file, "utf8").split(/\r?\n/);
+  const errorIndex = location.line - 1;
+  const start = Math.max(0, errorIndex - contextLines);
+  const end = Math.min(lines.length - 1, errorIndex + contextLines);
+  const lineNumberWidth = String(end + 1).length;
+  const output = [];
+  for (let index = start; index <= end; index++) {
+    const number = String(index + 1).padStart(lineNumberWidth, " ");
+    const isErrorLine = index === errorIndex;
+    const marker = isErrorLine ? pc.red(">") : " ";
+    const line = lines[index];
+    output.push(
+      `${marker} ${pc.dim(number)} ${pc.dim("\u2502")} ${line}`
+    );
+    if (isErrorLine) {
+      const indentation = " ".repeat(Math.max(0, location.column - 1));
+      output.push(
+        `  ${" ".repeat(lineNumberWidth)} ${pc.dim("\u2502")} ${indentation}${pc.red("^")}`
+      );
+    }
+  }
+  return output.join("\n");
+}
+function formatDevPageError(args) {
+  const { root, phase, debug = false } = args;
+  const error = args.error instanceof Error ? args.error : new Error(String(args.error));
+  const extractedLocation = extractSourceLocation(error, root);
+  const location = extractedLocation ? refineReferenceErrorLocation(error, extractedLocation) : null;
+  const sourceFrame = location ? createSourceFrame(location) : null;
+  const heading = phase === "load" ? "PAGE LOAD ERROR" : "PAGE RELOAD ERROR";
+  const fileLabel = location ? ` ${path3.relative(root, location.file)}:${location.line}:${location.column}` : "";
+  const separatorLength = Math.max(
+    12,
+    64 - heading.length - fileLabel.length
+  );
+  const output = [
+    "",
+    pc.cyan(
+      `\u2500\u2500 ${heading} ${"\u2500".repeat(separatorLength)}${fileLabel}`
+    ),
+    "",
+    `${pc.red(error.name + ":")} ${error.message}`
+  ];
+  if (location && sourceFrame) {
+    output.push("", path3.relative(root, location.file), "", sourceFrame);
+  }
+  if (debug && error.stack) {
+    output.push("", pc.dim(error.stack));
+  }
+  output.push(
+    "",
+    pc.yellow("Fix the error and save again."),
+    pc.dim("Watching for file changes..."),
+    ""
+  );
+  return output.join("\n");
+}
+
 // src/constants.ts
 var PLUGIN_NAME = "vite-plugin-html-pages";
 var VIRTUAL_BUILD_ENTRY_ID = `\0${PLUGIN_NAME}:build-entry`;
@@ -227,7 +363,7 @@ var RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID = `\0${VIRTUAL_JSX_DEV_RUNTIME_ID}`;
 var VIRTUAL_LOCAL_TYPES_PREFIX = `\0${PLUGIN_NAME}:local-types:`;
 
 // src/discover.ts
-import path3 from "path";
+import path4 from "path";
 
 // src/route-utils.ts
 var DYNAMIC_SEGMENT_RE = /\[([A-Za-z0-9_]+)\]/g;
@@ -382,7 +518,7 @@ async function discoverEntryPages(root, options) {
   const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [".ht.js", ".html.js", ".ht.ts", ".html.ts", ".ht.jsx", ".html.jsx", ".ht.tsx", ".html.tsx"];
   const include = Array.isArray(options.include) ? options.include : options.include ? [options.include] : buildDefaultIncludeGlobs(pagesDir, pageExtensions);
   const exclude = Array.isArray(options.exclude) ? options.exclude : options.exclude ? [options.exclude] : [];
-  const pagesRoot = normalizeFsPath(path3.join(root, pagesDir));
+  const pagesRoot = normalizeFsPath(path4.join(root, pagesDir));
   const files = await fg2.glob(include, {
     cwd: root,
     ignore: exclude,
@@ -390,8 +526,8 @@ async function discoverEntryPages(root, options) {
   });
   return files.sort().map((absolutePath) => {
     const entryPath = normalizeFsPath(absolutePath);
-    const relativePath = toPosix(path3.relative(root, entryPath));
-    const relativeFromPagesDir = toPosix(path3.relative(pagesRoot, entryPath));
+    const relativePath = toPosix(path4.relative(root, entryPath));
+    const relativeFromPagesDir = toPosix(path4.relative(pagesRoot, entryPath));
     if (relativeFromPagesDir.startsWith("../") || relativeFromPagesDir === "..") {
       throw new Error(
         `[${PLUGIN_NAME}] Page is outside pagesDir: ${entryPath} (pagesDir: ${pagesDir})`
@@ -417,8 +553,8 @@ async function discoverEntryPages(root, options) {
 }
 
 // src/dev-server.ts
-import fs2 from "fs";
-import path5 from "path";
+import fs3 from "fs";
+import path6 from "path";
 
 // src/errors.ts
 function invalidHtmlReturn(page, value) {
@@ -588,7 +724,7 @@ async function renderPage(page, mod, dev = false) {
 }
 
 // src/module-loader.ts
-import path4 from "path";
+import path5 from "path";
 import {
   createServer,
   isRunnableDevEnvironment
@@ -750,9 +886,9 @@ export {
               RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length
             );
             const pages = await getPages();
-            const normalizedImporter = path4.resolve(importer);
+            const normalizedImporter = path5.resolve(importer);
             const page = pages.find(
-              (candidate) => path4.resolve(candidate.absolutePath) === normalizedImporter
+              (candidate) => path5.resolve(candidate.absolutePath) === normalizedImporter
             );
             return generateTypedPageHelper(page);
           }
@@ -762,7 +898,7 @@ export {
     buildServer = await createServer(config);
   }
   return async (entryPath) => {
-    const relativePath = "/" + path4.relative(root, entryPath).replace(/\\/g, "/");
+    const relativePath = "/" + path5.relative(root, entryPath).replace(/\\/g, "/");
     return importPageModule(buildServer, relativePath);
   };
 }
@@ -793,8 +929,8 @@ function tryRewriteRootAssetToSrc(root, pagesDir, url) {
   if (!url.startsWith("/")) return null;
   if (!isStaticAssetRequest(url)) return null;
   if (url.startsWith(`/${pagesDir}/`)) return null;
-  const candidate = path5.join(root, pagesDir, url.slice(1));
-  if (fs2.existsSync(candidate)) {
+  const candidate = path6.join(root, pagesDir, url.slice(1));
+  if (fs3.existsSync(candidate)) {
     return `/${pagesDir}/${url.slice(1)}`;
   }
   return null;
@@ -805,8 +941,8 @@ function rewriteRootAssetUrlsInDevHtml(html, root, pagesDir) {
     (full, attr, url) => {
       if (!isStaticAssetRequest(url)) return full;
       if (url.startsWith(`/${pagesDir}/`)) return full;
-      const candidate = path5.join(root, pagesDir, url.slice(1));
-      if (!fs2.existsSync(candidate)) return full;
+      const candidate = path6.join(root, pagesDir, url.slice(1));
+      if (!fs3.existsSync(candidate)) return full;
       return `${attr}="/${pagesDir}/${url.slice(1)}"`;
     }
   );
@@ -866,8 +1002,8 @@ function installDevServer(args) {
 }
 
 // src/html-asset-validator.ts
-import fs3 from "fs";
-import path6 from "path";
+import fs4 from "fs";
+import path7 from "path";
 function stripQueryAndHash(url) {
   return url.split("#")[0].split("?")[0];
 }
@@ -876,10 +1012,10 @@ function isLocalRootUrl(url) {
 }
 function fileExistsForPublicUrl(root, pagesDir, url) {
   const clean = stripQueryAndHash(url).slice(1);
-  const fromSrc = path6.join(root, pagesDir, clean);
-  if (fs3.existsSync(fromSrc)) return true;
-  const fromPublic = path6.join(root, "public", clean);
-  if (fs3.existsSync(fromPublic)) return true;
+  const fromSrc = path7.join(root, pagesDir, clean);
+  if (fs4.existsSync(fromSrc)) return true;
+  const fromPublic = path7.join(root, "public", clean);
+  if (fs4.existsSync(fromPublic)) return true;
   return false;
 }
 function collectScriptSrcs(html) {
@@ -921,8 +1057,8 @@ function missingAssetMessage(args) {
   const pageSuffix = formatPageLabel(pageLabel);
   return `[${pluginName}] Missing ${kind}${pageSuffix}: ${url}
 Expected one of:
-- ${path6.join(root, pagesDir, clean)}
-- ${path6.join(root, "public", clean)}`;
+- ${path7.join(root, pagesDir, clean)}
+- ${path7.join(root, "public", clean)}`;
 }
 function reportMissing(args) {
   const message = missingAssetMessage(args);
@@ -1036,8 +1172,8 @@ async function buildPageIndex(args) {
 }
 
 // src/static-assets.ts
-import fs4 from "fs/promises";
-import path7 from "path";
+import fs5 from "fs/promises";
+import path8 from "path";
 import fg from "fast-glob";
 import * as esbuild from "esbuild";
 import fsSync from "fs";
@@ -1061,7 +1197,7 @@ function toOutputFileName(relativePathFromSrc) {
 }
 async function collectStaticAssets(args) {
   const { root, pagesDir, pageExtensions } = args;
-  const srcDir = path7.join(root, pagesDir);
+  const srcDir = path8.join(root, pagesDir);
   const entries = await fg("**/*", {
     cwd: srcDir,
     onlyFiles: true,
@@ -1073,7 +1209,7 @@ async function collectStaticAssets(args) {
     const rel = normalizeSlashes(entry);
     if (shouldIgnoreFile(rel)) continue;
     if (hasAnySuffix(rel, pageExtensions)) continue;
-    const absolutePath = path7.join(srcDir, rel);
+    const absolutePath = path8.join(srcDir, rel);
     assets.push({
       absolutePath,
       relativePathFromSrc: rel,
@@ -1084,7 +1220,7 @@ async function collectStaticAssets(args) {
   return assets;
 }
 async function copyStaticAssetSource(asset) {
-  return fs4.readFile(asset.absolutePath);
+  return fs5.readFile(asset.absolutePath);
 }
 async function buildProcessedStaticAssets(args) {
   const { root, pagesDir, assets, minify = true, sourcemap = false } = args;
@@ -1093,8 +1229,8 @@ async function buildProcessedStaticAssets(args) {
   if (processable.length === 0) {
     return out;
   }
-  const srcDir = path7.join(root, pagesDir);
-  const distDir = path7.join(root, "dist");
+  const srcDir = path8.join(root, pagesDir);
+  const distDir = path8.join(root, "dist");
   const warnedMissingAssets = /* @__PURE__ */ new Set();
   const result = await esbuild.build({
     entryPoints: processable.map((a) => a.absolutePath),
@@ -1130,15 +1266,15 @@ async function buildProcessedStaticAssets(args) {
         name: "html-pages-root-url-resolver",
         setup(build2) {
           build2.onResolve({ filter: /^\// }, (resolveArgs) => {
-            if (path7.isAbsolute(resolveArgs.path) && fsSync.existsSync(resolveArgs.path)) {
+            if (path8.isAbsolute(resolveArgs.path) && fsSync.existsSync(resolveArgs.path)) {
               return { path: resolveArgs.path };
             }
             const cleanPath = resolveArgs.path.slice(1);
-            const fromSrc = path7.join(srcDir, cleanPath);
+            const fromSrc = path8.join(srcDir, cleanPath);
             if (fsSync.existsSync(fromSrc)) {
               return { path: fromSrc };
             }
-            const fromPublic = path7.join(root, "public", cleanPath);
+            const fromPublic = path8.join(root, "public", cleanPath);
             if (fsSync.existsSync(fromPublic)) {
               return {
                 path: resolveArgs.path,
@@ -1170,7 +1306,7 @@ async function buildProcessedStaticAssets(args) {
     ]
   });
   for (const file of result.outputFiles) {
-    const rel = normalizeSlashes(path7.relative(distDir, file.path));
+    const rel = normalizeSlashes(path8.relative(distDir, file.path));
     out.set(rel, file.text ?? file.contents);
   }
   return out;
@@ -1178,12 +1314,12 @@ async function buildProcessedStaticAssets(args) {
 
 // src/plugin.ts
 var hasWarnedESM = false;
-var pluginDir = path8.dirname(fileURLToPath(import.meta.url));
+var pluginDir = path9.dirname(fileURLToPath2(import.meta.url));
 function warnIfNotESM(root) {
   try {
-    const pkgPath = path8.join(root, "package.json");
-    if (!fs5.existsSync(pkgPath)) return;
-    const pkg = JSON.parse(fs5.readFileSync(pkgPath, "utf8"));
+    const pkgPath = path9.join(root, "package.json");
+    if (!fs6.existsSync(pkgPath)) return;
+    const pkg = JSON.parse(fs6.readFileSync(pkgPath, "utf8"));
     if (pkg.type !== "module") {
       console.warn(
         `[${PLUGIN_NAME}] \u26A0\uFE0F It is recommended to add "type": "module" to your package.json for optimal performance and to avoid Node ESM warnings.`
@@ -1340,23 +1476,23 @@ function htPages(options = {}) {
       if (id === RESOLVED_VIRTUAL_JSX_RUNTIME_ID) {
         return `
 export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
-          pathToFileURL(path8.join(pluginDir, "jsx-runtime.js")).href
+          pathToFileURL(path9.join(pluginDir, "jsx-runtime.js")).href
         )};
 `;
       }
       if (id === RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID) {
         return `
 export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
-          pathToFileURL(path8.join(pluginDir, "jsx-dev-runtime.js")).href
+          pathToFileURL(path9.join(pluginDir, "jsx-dev-runtime.js")).href
         )};
 `;
       }
       if (id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
         const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
         const { pages } = await buildPagesPipeline();
-        const normalizedImporter = path8.resolve(importer);
+        const normalizedImporter = path9.resolve(importer);
         const page = pages.find(
-          (candidate) => path8.resolve(candidate.absolutePath) === normalizedImporter
+          (candidate) => path9.resolve(candidate.absolutePath) === normalizedImporter
         );
         return generateTypedPageHelper(page);
       }
@@ -1392,7 +1528,7 @@ export {
       };
     },
     configResolved(resolved) {
-      root = options.root ? path8.resolve(resolved.root, options.root) : resolved.root;
+      root = options.root ? path9.resolve(resolved.root, options.root) : resolved.root;
       if (!hasWarnedESM) {
         warnIfNotESM(root);
         hasWarnedESM = true;
@@ -1443,14 +1579,19 @@ export {
               type: "full-reload",
               path: "*"
             });
-          } catch {
-            server?.config.logger.info(
-              `[${PLUGIN_NAME}] Page reload failed \u2014 watching for file changes...`
+          } catch (error) {
+            server?.config.logger.error(
+              formatDevPageError({
+                error,
+                root,
+                phase: "reload",
+                debug: options.debug
+              })
             );
           }
         };
         const reload = (file) => {
-          if (!file.includes(`${path8.sep}${pagesDir}${path8.sep}`) && !file.includes(`/${pagesDir}/`)) {
+          if (!file.includes(`${path9.sep}${pagesDir}${path9.sep}`) && !file.includes(`/${pagesDir}/`)) {
             return;
           }
           void reloadAfterChange(file);
@@ -1459,9 +1600,14 @@ export {
         server.watcher.on("change", reload);
         server.watcher.on("unlink", reload);
       }
-      loadDevPages().catch((error) => {
-        server?.config.logger.info(
-          `[${PLUGIN_NAME}] Page load failed \u2014 watching for file changes...`
+      void loadDevPages().catch((error) => {
+        server?.config.logger.error(
+          formatDevPageError({
+            error,
+            root,
+            phase: "load",
+            debug: options.debug
+          })
         );
       });
     },
@@ -1673,8 +1819,8 @@ ${rssItems}
 }
 
 // src/fetch-cache.ts
-import fs6 from "fs/promises";
-import path9 from "path";
+import fs7 from "fs/promises";
+import path10 from "path";
 import { createHash } from "crypto";
 var memoryCache = /* @__PURE__ */ new Map();
 function createDefaultCacheKey(input, init) {
@@ -1687,7 +1833,7 @@ function createDefaultCacheKey(input, init) {
   return createHash("sha256").update(raw).digest("hex");
 }
 function getCacheFilePath(cacheKey) {
-  return path9.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
+  return path10.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
 }
 function getEffectiveCacheMode(mode) {
   if (mode === "memory" || mode === "fs" || mode === "none") {
@@ -1725,10 +1871,10 @@ async function fetchWithCache(input, init, options = {}) {
   }
   const filePath = getCacheFilePath(cacheKey);
   if (cacheMode === "fs") {
-    await fs6.mkdir(path9.dirname(filePath), { recursive: true });
+    await fs7.mkdir(path10.dirname(filePath), { recursive: true });
     if (!options.forceRefresh) {
       try {
-        const raw = await fs6.readFile(filePath, "utf8");
+        const raw = await fs7.readFile(filePath, "utf8");
         const cached = JSON.parse(raw);
         if (isFresh(cached, maxAge)) {
           return toResponse(cached);
@@ -1749,7 +1895,7 @@ async function fetchWithCache(input, init, options = {}) {
   if (cacheMode === "memory") {
     memoryCache.set(cacheKey, record);
   } else if (cacheMode === "fs") {
-    await fs6.writeFile(filePath, JSON.stringify(record), "utf8");
+    await fs7.writeFile(filePath, JSON.stringify(record), "utf8");
   }
   return new Response(body, {
     status: res.status,
