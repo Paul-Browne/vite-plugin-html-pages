@@ -19,7 +19,6 @@ export default defineConfig({
     'fast-glob',
     'p-limit',
     'esbuild',
-    'javascript-to-html',
     'react',
     'react/jsx-runtime',
     'react/jsx-dev-runtime',

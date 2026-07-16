@@ -1,6 +1,67 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { collectLocalAssetUrls } from '../src/html-asset-validator';
+import {
+  collectLocalAssetUrls,
+  validateHtmlAssetReferences,
+} from '../src/html-asset-validator';
+
+function makeFixtureRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'htjs-pages-'));
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  return root;
+}
+
+describe('validateHtmlAssetReferences', () => {
+  it('detects missing stylesheets regardless of attribute order', () => {
+    const root = makeFixtureRoot();
+
+    expect(() =>
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: '<link href="/missing.css" rel="stylesheet">',
+        pluginName: 'test',
+        missingAssets: 'error',
+      }),
+    ).toThrow(/missing\.css/);
+  });
+
+  it('accepts stylesheets that exist, href-first or rel-first', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'styles.css'), 'body{}');
+
+    expect(() =>
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: `
+          <link href="/styles.css" rel="stylesheet">
+          <link rel="stylesheet" href="/styles.css">
+        `,
+        pluginName: 'test',
+        missingAssets: 'error',
+      }),
+    ).not.toThrow();
+  });
+
+  it('detects missing script sources', () => {
+    const root = makeFixtureRoot();
+
+    expect(() =>
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: '<script src="/missing.js"></script>',
+        pluginName: 'test',
+        missingAssets: 'error',
+      }),
+    ).toThrow(/missing\.js/);
+  });
+})
 
 describe('collectLocalAssetUrls', () => {
   it('collects root-relative href and src urls', () => {

@@ -23,6 +23,15 @@ export async function buildPageIndex(args: {
           ? await mod.generateStaticParams()
           : []) ?? [];
 
+      const paramRows = Array.isArray(rows) ? rows : [];
+
+      if (paramRows.length === 0) {
+        console.warn(
+          `[${PLUGIN_NAME}] ⚠️ Dynamic page "${entry.relativePath}" generated no routes. ` +
+            `Export generateStaticParams() returning at least one params object to emit pages for it.`,
+        );
+      }
+
       pages.push(
         ...expandStaticPaths(
           {
@@ -35,7 +44,7 @@ export async function buildPageIndex(args: {
             paramNames: entry.paramNames,
             paramDefinitions: entry.paramDefinitions,
           },
-          Array.isArray(rows) ? rows : [],
+          paramRows,
           cleanUrls,
         ),
       );

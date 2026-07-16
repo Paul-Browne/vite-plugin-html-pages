@@ -10,6 +10,7 @@ import { writePageTypeDeclarations } from './typegen';
 import { formatDevPageError } from './format-dev-error';
 
 import {
+  DEFAULT_PAGE_EXTENSIONS,
   PLUGIN_NAME,
   VIRTUAL_BUILD_ENTRY_ID,
   VIRTUAL_PAGE_HELPER_ID,
@@ -26,7 +27,10 @@ import {
   collectLocalAssetUrls,
   validateHtmlAssetReferences,
 } from './html-asset-validator';
-import { createPageModuleLoader } from './module-loader';
+import {
+  createPageModuleLoader,
+  isLocalPageTypesImport,
+} from './module-loader';
 import { buildPageIndex } from './page-index';
 import { generateTypedPageHelper } from './page-helper-generator';
 import { renderPage } from './render-runtime';
@@ -60,8 +64,13 @@ function warnIfNotESM(root: string) {
   }
 }
 
-function isLocalPageTypesImport(id: string): boolean {
-  return /^\.\/\$types(?:\.[A-Za-z0-9_.-]+)?$/.test(id);
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 function chunkArray<T>(items: T[], size: number): T[][] {
@@ -158,16 +167,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   const pagesDir = options.pagesDir ?? 'src';
   const pageExtensions = options.pageExtensions?.length
     ? options.pageExtensions
-    : [
-        '.ht.js',
-        '.html.js',
-        '.ht.ts',
-        '.html.ts',
-        '.ht.jsx',
-        '.html.jsx',
-        '.ht.tsx',
-        '.html.tsx',
-      ];
+    : DEFAULT_PAGE_EXTENSIONS;
 
   function logDebug(enabled: boolean | undefined, ...args: unknown[]) {
     if (!enabled) return;
@@ -493,10 +493,19 @@ export {
           }
         };
 
+        const pagesRoot = path.join(root, pagesDir);
+
         const reload = (file: string): void => {
+          // Only react to files inside this project's pages directory;
+          // a substring check like "/src/" would also match unrelated
+          // paths such as node_modules/*/src/*.
+          const relative = path.relative(pagesRoot, file);
+
           if (
-            !file.includes(`${path.sep}${pagesDir}${path.sep}`) &&
-            !file.includes(`/${pagesDir}/`)
+            relative === '' ||
+            relative.startsWith('..') ||
+            path.isAbsolute(relative) ||
+            relative.split(path.sep).includes('node_modules')
           ) {
             return;
           }
@@ -683,7 +692,7 @@ export {
           source: notFoundHtml,
         });
 
-        const sitemapBase = options.site ?? '';
+        const sitemapBase = (options.site ?? '').replace(/\/+$/, '');
 
         const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(
           (route) => !route.includes(':') && !route.includes('*'),
@@ -691,7 +700,10 @@ export {
 
         if (sitemapBase && sitemapRoutes.length > 0) {
           const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${sitemapRoutes
-            .map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`)
+            .map(
+              (route) =>
+                `  <url><loc>${escapeXml(`${sitemapBase}${route}`)}</loc></url>`,
+            )
             .join('\n')}\n</urlset>\n`;
 
           this.emitFile({
@@ -707,17 +719,18 @@ export {
 
         if (rss?.site) {
           const routePrefix = rss.routePrefix ?? '/blog';
+          const rssSite = rss.site.replace(/\/+$/, '');
 
           const rssItems = pages
             .filter((page) => page.routePath.startsWith(routePrefix))
             .map((page) => {
-              const url = `${rss.site}${page.routePath}`;
+              const url = escapeXml(`${rssSite}${page.routePath}`);
 
-              return `  <item>\n    <title>${page.routePath}</title>\n    <link>${url}</link>\n    <guid>${url}</guid>\n  </item>`;
+              return `  <item>\n    <title>${escapeXml(page.routePath)}</title>\n    <link>${url}</link>\n    <guid>${url}</guid>\n  </item>`;
             })
             .join('\n');
 
-          const rssXml = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n  <title>${rss.title ?? PLUGIN_NAME}</title>\n  <link>${rss.site}</link>\n  <description>${rss.description ?? 'RSS feed'}</description>\n${rssItems}\n</channel>\n</rss>\n`;
+          const rssXml = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n  <title>${escapeXml(rss.title ?? PLUGIN_NAME)}</title>\n  <link>${escapeXml(rssSite)}</link>\n  <description>${escapeXml(rss.description ?? 'RSS feed')}</description>\n${rssItems}\n</channel>\n</rss>\n`;
 
           this.emitFile({
             type: 'asset',

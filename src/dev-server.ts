@@ -51,12 +51,17 @@ function shouldSkipHtmlRouting(url: string, pagesDir: string): boolean {
   );
 }
 
+function hasDotDotSegment(url: string): boolean {
+  return url.split('/').includes('..');
+}
+
 function tryRewriteRootAssetToSrc(
   root: string,
   pagesDir: string,
   url: string,
 ): string | null {
   if (!url.startsWith('/')) return null;
+  if (hasDotDotSegment(url)) return null;
   if (!isStaticAssetRequest(url)) return null;
   if (url.startsWith(`/${pagesDir}/`)) return null;
 
@@ -77,6 +82,7 @@ function rewriteRootAssetUrlsInDevHtml(
   return html.replace(
     /\b(href|src)=["'](\/[^"']+)["']/g,
     (full, attr: string, url: string) => {
+      if (hasDotDotSegment(url)) return full;
       if (!isStaticAssetRequest(url)) return full;
       if (url.startsWith(`/${pagesDir}/`)) return full;
 
@@ -110,7 +116,13 @@ export function installDevServer(args: {
 
       const rewrittenAssetUrl = tryRewriteRootAssetToSrc(root, pagesDir, url);
       if (rewrittenAssetUrl) {
-        req.url = rewrittenAssetUrl + originalUrl.slice(url.length);
+        // Re-append the query/hash from the original URL; slicing by the
+        // normalized path length is wrong when normalization collapsed
+        // slashes or stripped a trailing slash.
+        const suffixIndex = originalUrl.search(/[?#]/);
+        const suffix = suffixIndex === -1 ? '' : originalUrl.slice(suffixIndex);
+
+        req.url = rewrittenAssetUrl + suffix;
         return next();
       }
 

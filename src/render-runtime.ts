@@ -8,7 +8,7 @@ import type {
   HtStructuredPageModule,
 } from './types';
 
-function isStructuredPageModule(value: unknown): value is HtStructuredPageModule {
+export function isStructuredPageModule(value: unknown): value is HtStructuredPageModule {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -110,6 +110,12 @@ export async function renderPage(
     }
 
     const result = await resolveRenderResult(page, mod, ctx);
+
+    // A missing `return` would otherwise sail through the React path and
+    // silently emit an empty page.
+    if (result == null) {
+      throw invalidHtmlReturn(page, result);
+    }
 
     if (typeof result === 'string') {
       return ensureDoctype(result);

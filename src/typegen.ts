@@ -1,78 +1,58 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import type { HtPageInfo, RouteParamDefinition } from './types';
+import type { HtPageInfo } from './types';
+import { paramsTypeFromDefinitions } from './page-helper-generator';
 import { normalizeFsPath, toPosix } from './path-utils';
 
-function paramsTypeFromDefinitions(
-  paramDefinitions: RouteParamDefinition[],
-): string {
-  if (paramDefinitions.length === 0) {
-    return '{}';
-  }
-
-  const fields = paramDefinitions.map((param) => {
-    if (param.type === 'single') {
-      return `${param.name}: string`;
-    }
-
-    if (param.type === 'catch-all') {
-      return `${param.name}: string[]`;
-    }
-
-    return `${param.name}?: string[]`;
-  });
-
-  return `{ ${fields.join('; ')} }`;
-}
-
 function pageHelperModuleSource(page: HtPageInfo): string {
-    const paramsType = paramsTypeFromDefinitions(page.paramDefinitions ?? []);
-    return `export type PageParams = ${paramsType};
-  
-  export type StaticParams = PageParams[];
-  
-  export type DataContext = {
-    params: PageParams;
-    dev: boolean;
-  };
-  
-  export type RenderContext<TData = unknown> = {
-    params: PageParams;
-    data: TData;
-    dev: boolean;
-  };
-  
-  export type PageContext<TData = unknown> = {
-    params: PageParams;
-    data?: TData;
-    dev: boolean;
-  };
-  
-  export type RenderResult = unknown;
-  
-  export type PageModule<TData = unknown> = {
-    generateStaticParams?: () => StaticParams | Promise<StaticParams>;
-    data?: (ctx: DataContext) => TData | Promise<TData>;
-    render: (ctx: RenderContext<TData>) => RenderResult | Promise<RenderResult>;
-  };
-  
-  export declare function definePage<
-    T extends (ctx: PageContext) => RenderResult | Promise<RenderResult>
-  >(fn: T): T;
-  
-  export declare function defineData<
-    T extends (ctx: DataContext) => unknown | Promise<unknown>
-  >(fn: T): T;
-  
-  export declare function defineStaticParams<
-    T extends () => StaticParams | Promise<StaticParams>
-  >(fn: T): T;
-  
-  export declare function definePageModule<TData>(
-    mod: PageModule<TData>
-  ): PageModule<TData>;
-  `;
+  const paramsType = paramsTypeFromDefinitions(page.paramDefinitions ?? []);
+
+  return `export type PageParams = ${paramsType};
+
+export type StaticParams = PageParams[];
+
+export type DataContext = {
+  params: PageParams;
+  dev: boolean;
+};
+
+export type RenderContext<TData = unknown> = {
+  params: PageParams;
+  data: TData;
+  dev: boolean;
+};
+
+export type PageContext<TData = unknown> = {
+  params: PageParams;
+  data?: TData;
+  dev: boolean;
+};
+
+export type RenderResult = unknown;
+
+export type PageModule<TData = unknown> = {
+  generateStaticParams?: () => StaticParams | Promise<StaticParams>;
+  data?: (ctx: DataContext) => TData | Promise<TData>;
+  render: (ctx: RenderContext<TData>) => RenderResult | Promise<RenderResult>;
+};
+
+export declare function definePage<
+  T extends (ctx: PageContext) => RenderResult | Promise<RenderResult>
+>(fn: T): T;
+
+export declare function defineData<
+  T extends (ctx: DataContext) => unknown | Promise<unknown>
+>(fn: T): T;
+
+export declare function defineStaticParams<
+  T extends () => StaticParams | Promise<StaticParams>
+>(fn: T): T;
+
+export declare function definePageModule<TData>(
+  mod: PageModule<TData>
+): PageModule<TData>;
+`;
 }
 
 function stripPageExtension(filePath: string): string {

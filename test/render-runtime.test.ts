@@ -100,6 +100,22 @@ describe('renderPage', () => {
     ).rejects.toThrow(/Failed to render "src\/index\.ht\.js".*boom/);
   });
 
+  it('throws when a page render returns undefined', async () => {
+    await expect(
+      renderPage(makePage(), {
+        default: () => undefined as unknown as string,
+      }),
+    ).rejects.toThrow(/received undefined/);
+  });
+
+  it('throws when a page render returns null', async () => {
+    await expect(
+      renderPage(makePage(), {
+        default: () => null as unknown as string,
+      }),
+    ).rejects.toThrow(/received null/);
+  });
+
   it('rejects non-string results when react is unavailable', async () => {
     // react is not installed in this repo, so a non-string render result
     // must fail loudly instead of being emitted.

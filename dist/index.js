@@ -9,6 +9,74 @@ import pLimit from "p-limit";
 import fs from "fs/promises";
 import path2 from "path";
 
+// src/page-helper-generator.ts
+function paramsTypeFromDefinitions(paramDefinitions) {
+  if (paramDefinitions.length === 0) {
+    return "{}";
+  }
+  const fields = paramDefinitions.map((param) => {
+    if (param.type === "single") {
+      return `${JSON.stringify(param.name)}: string`;
+    }
+    if (param.type === "catch-all") {
+      return `${JSON.stringify(param.name)}: string[]`;
+    }
+    return `${JSON.stringify(param.name)}?: string[]`;
+  });
+  return `{ ${fields.join("; ")} }`;
+}
+function generateTypedPageHelper(page) {
+  const paramsType = page ? paramsTypeFromDefinitions(page.paramDefinitions ?? []) : "{}";
+  return `
+export type PageParams = ${paramsType};
+
+export type StaticParams = PageParams[];
+
+export type DataContext = {
+  params: PageParams;
+  dev: boolean;
+};
+
+export type RenderContext<TData = unknown> = {
+  params: PageParams;
+  data: TData;
+  dev: boolean;
+};
+
+export type PageContext<TData = unknown> = {
+  params: PageParams;
+  data?: TData;
+  dev: boolean;
+};
+
+export type PageModule<TData = unknown> = {
+  generateStaticParams?: () => StaticParams | Promise<StaticParams>;
+  data?: (ctx: DataContext) => TData | Promise<TData>;
+  render: (ctx: RenderContext<TData>) => any;
+};
+
+export function definePage<T extends (ctx: PageContext) => any>(fn: T): T {
+  return fn;
+}
+
+export function defineData<T extends (ctx: DataContext) => any>(fn: T): T {
+  return fn;
+}
+
+export function defineStaticParams<
+  T extends () => StaticParams | Promise<StaticParams>
+>(fn: T): T {
+  return fn;
+}
+
+export function definePageModule<TData>(
+  mod: PageModule<TData>,
+): PageModule<TData> {
+  return mod;
+}
+`;
+}
+
 // src/path-utils.ts
 import path from "path";
 function toPosix(value) {
@@ -31,68 +99,53 @@ function stripPageSuffix(filePath, extensions) {
 }
 
 // src/typegen.ts
-function paramsTypeFromDefinitions(paramDefinitions) {
-  if (paramDefinitions.length === 0) {
-    return "{}";
-  }
-  const fields = paramDefinitions.map((param) => {
-    if (param.type === "single") {
-      return `${param.name}: string`;
-    }
-    if (param.type === "catch-all") {
-      return `${param.name}: string[]`;
-    }
-    return `${param.name}?: string[]`;
-  });
-  return `{ ${fields.join("; ")} }`;
-}
 function pageHelperModuleSource(page) {
   const paramsType = paramsTypeFromDefinitions(page.paramDefinitions ?? []);
   return `export type PageParams = ${paramsType};
-  
-  export type StaticParams = PageParams[];
-  
-  export type DataContext = {
-    params: PageParams;
-    dev: boolean;
-  };
-  
-  export type RenderContext<TData = unknown> = {
-    params: PageParams;
-    data: TData;
-    dev: boolean;
-  };
-  
-  export type PageContext<TData = unknown> = {
-    params: PageParams;
-    data?: TData;
-    dev: boolean;
-  };
-  
-  export type RenderResult = unknown;
-  
-  export type PageModule<TData = unknown> = {
-    generateStaticParams?: () => StaticParams | Promise<StaticParams>;
-    data?: (ctx: DataContext) => TData | Promise<TData>;
-    render: (ctx: RenderContext<TData>) => RenderResult | Promise<RenderResult>;
-  };
-  
-  export declare function definePage<
-    T extends (ctx: PageContext) => RenderResult | Promise<RenderResult>
-  >(fn: T): T;
-  
-  export declare function defineData<
-    T extends (ctx: DataContext) => unknown | Promise<unknown>
-  >(fn: T): T;
-  
-  export declare function defineStaticParams<
-    T extends () => StaticParams | Promise<StaticParams>
-  >(fn: T): T;
-  
-  export declare function definePageModule<TData>(
-    mod: PageModule<TData>
-  ): PageModule<TData>;
-  `;
+
+export type StaticParams = PageParams[];
+
+export type DataContext = {
+  params: PageParams;
+  dev: boolean;
+};
+
+export type RenderContext<TData = unknown> = {
+  params: PageParams;
+  data: TData;
+  dev: boolean;
+};
+
+export type PageContext<TData = unknown> = {
+  params: PageParams;
+  data?: TData;
+  dev: boolean;
+};
+
+export type RenderResult = unknown;
+
+export type PageModule<TData = unknown> = {
+  generateStaticParams?: () => StaticParams | Promise<StaticParams>;
+  data?: (ctx: DataContext) => TData | Promise<TData>;
+  render: (ctx: RenderContext<TData>) => RenderResult | Promise<RenderResult>;
+};
+
+export declare function definePage<
+  T extends (ctx: PageContext) => RenderResult | Promise<RenderResult>
+>(fn: T): T;
+
+export declare function defineData<
+  T extends (ctx: DataContext) => unknown | Promise<unknown>
+>(fn: T): T;
+
+export declare function defineStaticParams<
+  T extends () => StaticParams | Promise<StaticParams>
+>(fn: T): T;
+
+export declare function definePageModule<TData>(
+  mod: PageModule<TData>
+): PageModule<TData>;
+`;
 }
 function stripPageExtension(filePath) {
   return filePath.replace(/\.(ht|html)\.(js|ts|jsx|tsx)$/i, "");
@@ -354,8 +407,17 @@ var PLUGIN_NAME = "vite-plugin-html-pages";
 var VIRTUAL_BUILD_ENTRY_ID = `\0${PLUGIN_NAME}:build-entry`;
 var VIRTUAL_PAGE_HELPER_ID = `${PLUGIN_NAME}/page`;
 var RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX = `\0${PLUGIN_NAME}/page:`;
-var VIRTUAL_MANIFEST_ID = `\0virtual:${PLUGIN_NAME}-manifest`;
 var CACHE_DIR_NAME = `node_modules/.cache/${PLUGIN_NAME}`;
+var DEFAULT_PAGE_EXTENSIONS = [
+  ".ht.js",
+  ".html.js",
+  ".ht.ts",
+  ".html.ts",
+  ".ht.jsx",
+  ".html.jsx",
+  ".ht.tsx",
+  ".html.tsx"
+];
 var VIRTUAL_JSX_RUNTIME_ID = `${PLUGIN_NAME}/jsx-runtime`;
 var VIRTUAL_JSX_DEV_RUNTIME_ID = `${PLUGIN_NAME}/jsx-dev-runtime`;
 var RESOLVED_VIRTUAL_JSX_RUNTIME_ID = `\0${VIRTUAL_JSX_RUNTIME_ID}`;
@@ -515,7 +577,7 @@ async function discoverEntryPages(root, options) {
   const fgModule = await import("fast-glob");
   const fg2 = fgModule.default ?? fgModule;
   const pagesDir = options.pagesDir ?? "src";
-  const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [".ht.js", ".html.js", ".ht.ts", ".html.ts", ".ht.jsx", ".html.jsx", ".ht.tsx", ".html.tsx"];
+  const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : DEFAULT_PAGE_EXTENSIONS;
   const include = Array.isArray(options.include) ? options.include : options.include ? [options.include] : buildDefaultIncludeGlobs(pagesDir, pageExtensions);
   const exclude = Array.isArray(options.exclude) ? options.exclude : options.exclude ? [options.exclude] : [];
   const pagesRoot = normalizeFsPath(path4.join(root, pagesDir));
@@ -700,6 +762,9 @@ async function renderPage(page, mod, dev = false) {
       ctx.data = await mod.data(ctx);
     }
     const result = await resolveRenderResult(page, mod, ctx);
+    if (result == null) {
+      throw invalidHtmlReturn(page, result);
+    }
     if (typeof result === "string") {
       return ensureDoctype(result);
     }
@@ -730,76 +795,6 @@ import {
   isRunnableDevEnvironment,
   loadConfigFromFile
 } from "vite";
-
-// src/page-helper-generator.ts
-function paramsTypeFromDefinitions2(paramDefinitions) {
-  if (paramDefinitions.length === 0) {
-    return "{}";
-  }
-  const fields = paramDefinitions.map((param) => {
-    if (param.type === "single") {
-      return `${JSON.stringify(param.name)}: string`;
-    }
-    if (param.type === "catch-all") {
-      return `${JSON.stringify(param.name)}: string[]`;
-    }
-    return `${JSON.stringify(param.name)}?: string[]`;
-  });
-  return `{ ${fields.join("; ")} }`;
-}
-function generateTypedPageHelper(page) {
-  const paramsType = page ? paramsTypeFromDefinitions2(page.paramDefinitions ?? []) : "{}";
-  return `
-export type PageParams = ${paramsType};
-
-export type StaticParams = PageParams[];
-
-export type DataContext = {
-  params: PageParams;
-  dev: boolean;
-};
-
-export type RenderContext<TData = unknown> = {
-  params: PageParams;
-  data: TData;
-  dev: boolean;
-};
-
-export type PageContext<TData = unknown> = {
-  params: PageParams;
-  data?: TData;
-  dev: boolean;
-};
-
-export type PageModule<TData = unknown> = {
-  generateStaticParams?: () => StaticParams | Promise<StaticParams>;
-  data?: (ctx: DataContext) => TData | Promise<TData>;
-  render: (ctx: RenderContext<TData>) => any;
-};
-
-export function definePage<T extends (ctx: PageContext) => any>(fn: T): T {
-  return fn;
-}
-
-export function defineData<T extends (ctx: DataContext) => any>(fn: T): T {
-  return fn;
-}
-
-export function defineStaticParams<
-  T extends () => StaticParams | Promise<StaticParams>
->(fn: T): T {
-  return fn;
-}
-
-export function definePageModule<TData>(
-  mod: PageModule<TData>,
-): PageModule<TData> {
-  return mod;
-}
-`;
-}
-
-// src/module-loader.ts
 async function importPageModule(server, url) {
   const environment = server.environments.ssr;
   if (!isRunnableDevEnvironment(environment)) {
@@ -810,15 +805,12 @@ async function importPageModule(server, url) {
   const mod = await environment.runner.import(url);
   return normalizeLoadedPageModule(mod);
 }
-function isStructuredPageModule2(value) {
-  return !!value && typeof value === "object" && "render" in value && typeof value.render === "function";
-}
 function isLocalPageTypesImport(id) {
   return /^\.\/\$types(?:\.[A-Za-z0-9_.-]+)?$/.test(id);
 }
 function normalizeLoadedPageModule(mod) {
   const pageModule = mod ?? {};
-  if (isStructuredPageModule2(pageModule.default)) {
+  if (isStructuredPageModule(pageModule.default)) {
     const structured = pageModule.default;
     return {
       default: structured.render,
@@ -967,8 +959,12 @@ function normalizeRoutePath2(input) {
 function shouldSkipHtmlRouting(url, pagesDir) {
   return url.startsWith("/@vite") || url.startsWith("/@fs/") || url.startsWith("/node_modules/") || url.startsWith(`/${pagesDir}/`) || url === "/favicon.ico" || isStaticAssetRequest(url);
 }
+function hasDotDotSegment(url) {
+  return url.split("/").includes("..");
+}
 function tryRewriteRootAssetToSrc(root, pagesDir, url) {
   if (!url.startsWith("/")) return null;
+  if (hasDotDotSegment(url)) return null;
   if (!isStaticAssetRequest(url)) return null;
   if (url.startsWith(`/${pagesDir}/`)) return null;
   const candidate = path6.join(root, pagesDir, url.slice(1));
@@ -981,6 +977,7 @@ function rewriteRootAssetUrlsInDevHtml(html, root, pagesDir) {
   return html.replace(
     /\b(href|src)=["'](\/[^"']+)["']/g,
     (full, attr, url) => {
+      if (hasDotDotSegment(url)) return full;
       if (!isStaticAssetRequest(url)) return full;
       if (url.startsWith(`/${pagesDir}/`)) return full;
       const candidate = path6.join(root, pagesDir, url.slice(1));
@@ -1002,7 +999,9 @@ function installDevServer(args) {
       const url = normalizeRoutePath2(originalUrl);
       const rewrittenAssetUrl = tryRewriteRootAssetToSrc(root, pagesDir, url);
       if (rewrittenAssetUrl) {
-        req.url = rewrittenAssetUrl + originalUrl.slice(url.length);
+        const suffixIndex = originalUrl.search(/[?#]/);
+        const suffix = suffixIndex === -1 ? "" : originalUrl.slice(suffixIndex);
+        req.url = rewrittenAssetUrl + suffix;
         return next();
       }
       if (shouldSkipHtmlRouting(url, pagesDir)) {
@@ -1071,10 +1070,11 @@ function collectScriptSrcs(html) {
 }
 function collectStylesheetHrefs(html) {
   const out = [];
-  for (const match of html.matchAll(
-    /<link\b[^>]*\brel=["']stylesheet["'][^>]*\bhref=["']([^"']+)["'][^>]*>/gi
-  )) {
-    out.push(match[1]);
+  for (const match of html.matchAll(/<link\b[^>]*>/gi)) {
+    const tag = match[0];
+    if (!/\brel=["']?stylesheet["']?/i.test(tag)) continue;
+    const href = tag.match(/\bhref=["']([^"']+)["']/i);
+    if (href) out.push(href[1]);
   }
   return out;
 }
@@ -1188,6 +1188,12 @@ async function buildPageIndex(args) {
     const mod = modulesByEntry.get(entry.entryPath) ?? {};
     if (entry.dynamic) {
       const rows = (mod.generateStaticParams ? await mod.generateStaticParams() : []) ?? [];
+      const paramRows = Array.isArray(rows) ? rows : [];
+      if (paramRows.length === 0) {
+        console.warn(
+          `[${PLUGIN_NAME}] \u26A0\uFE0F Dynamic page "${entry.relativePath}" generated no routes. Export generateStaticParams() returning at least one params object to emit pages for it.`
+        );
+      }
       pages.push(
         ...expandStaticPaths(
           {
@@ -1200,7 +1206,7 @@ async function buildPageIndex(args) {
             paramNames: entry.paramNames,
             paramDefinitions: entry.paramDefinitions
           },
-          Array.isArray(rows) ? rows : [],
+          paramRows,
           cleanUrls
         )
       );
@@ -1384,8 +1390,8 @@ function warnIfNotESM(root) {
   } catch {
   }
 }
-function isLocalPageTypesImport2(id) {
-  return /^\.\/\$types(?:\.[A-Za-z0-9_.-]+)?$/.test(id);
+function escapeXml(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 function chunkArray(items, size) {
   const out = [];
@@ -1459,16 +1465,7 @@ function htPages(options = {}) {
   let buildPipelinePromise = null;
   const cleanUrls = options.cleanUrls ?? true;
   const pagesDir = options.pagesDir ?? "src";
-  const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : [
-    ".ht.js",
-    ".html.js",
-    ".ht.ts",
-    ".html.ts",
-    ".ht.jsx",
-    ".html.jsx",
-    ".ht.tsx",
-    ".html.tsx"
-  ];
+  const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : DEFAULT_PAGE_EXTENSIONS;
   function logDebug(enabled, ...args) {
     if (!enabled) return;
     console.log(`[${PLUGIN_NAME}]`, ...args);
@@ -1593,7 +1590,7 @@ function htPages(options = {}) {
           return RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID;
         }
       }
-      if (importer && isLocalPageTypesImport2(id)) {
+      if (importer && isLocalPageTypesImport(id)) {
         return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
       }
       return null;
@@ -1722,8 +1719,10 @@ export {
             );
           }
         };
+        const pagesRoot = path9.join(root, pagesDir);
         const reload = (file) => {
-          if (!file.includes(`${path9.sep}${pagesDir}${path9.sep}`) && !file.includes(`/${pagesDir}/`)) {
+          const relative = path9.relative(pagesRoot, file);
+          if (relative === "" || relative.startsWith("..") || path9.isAbsolute(relative) || relative.split(path9.sep).includes("node_modules")) {
             return;
           }
           void reloadAfterChange(file);
@@ -1862,14 +1861,16 @@ export {
           fileName: "404.html",
           source: notFoundHtml
         });
-        const sitemapBase = options.site ?? "";
+        const sitemapBase = (options.site ?? "").replace(/\/+$/, "");
         const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(
           (route) => !route.includes(":") && !route.includes("*")
         );
         if (sitemapBase && sitemapRoutes.length > 0) {
           const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${sitemapRoutes.map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`).join("\n")}
+${sitemapRoutes.map(
+            (route) => `  <url><loc>${escapeXml(`${sitemapBase}${route}`)}</loc></url>`
+          ).join("\n")}
 </urlset>
 `;
           this.emitFile({
@@ -1882,10 +1883,11 @@ ${sitemapRoutes.map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`)
         const rss = options.rss;
         if (rss?.site) {
           const routePrefix = rss.routePrefix ?? "/blog";
+          const rssSite = rss.site.replace(/\/+$/, "");
           const rssItems = pages.filter((page) => page.routePath.startsWith(routePrefix)).map((page) => {
-            const url = `${rss.site}${page.routePath}`;
+            const url = escapeXml(`${rssSite}${page.routePath}`);
             return `  <item>
-    <title>${page.routePath}</title>
+    <title>${escapeXml(page.routePath)}</title>
     <link>${url}</link>
     <guid>${url}</guid>
   </item>`;
@@ -1893,9 +1895,9 @@ ${sitemapRoutes.map((route) => `  <url><loc>${sitemapBase}${route}</loc></url>`)
           const rssXml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
 <channel>
-  <title>${rss.title ?? PLUGIN_NAME}</title>
-  <link>${rss.site}</link>
-  <description>${rss.description ?? "RSS feed"}</description>
+  <title>${escapeXml(rss.title ?? PLUGIN_NAME)}</title>
+  <link>${escapeXml(rssSite)}</link>
+  <description>${escapeXml(rss.description ?? "RSS feed")}</description>
 ${rssItems}
 </channel>
 </rss>
@@ -1941,14 +1943,36 @@ function createDefaultCacheKey(input, init) {
   });
   return createHash("sha256").update(raw).digest("hex");
 }
+var SAFE_FILE_KEY_RE = /^[A-Za-z0-9._-]{1,200}$/;
+function toSafeFileKey(cacheKey) {
+  if (SAFE_FILE_KEY_RE.test(cacheKey)) {
+    return cacheKey;
+  }
+  return createHash("sha256").update(cacheKey).digest("hex");
+}
 function getCacheFilePath(cacheKey) {
-  return path10.join(process.cwd(), CACHE_DIR_NAME, "fetch", `${cacheKey}.json`);
+  return path10.join(
+    process.cwd(),
+    CACHE_DIR_NAME,
+    "fetch",
+    `${toSafeFileKey(cacheKey)}.json`
+  );
 }
 function getEffectiveCacheMode(mode) {
   if (mode === "memory" || mode === "fs" || mode === "none") {
     return mode;
   }
   return process.env.NODE_ENV === "production" ? "fs" : "memory";
+}
+var BODY_ENCODING_HEADERS = /* @__PURE__ */ new Set([
+  "content-encoding",
+  "content-length",
+  "transfer-encoding"
+]);
+function sanitizeHeaders(headers) {
+  return [...headers.entries()].filter(
+    ([name]) => !BODY_ENCODING_HEADERS.has(name.toLowerCase())
+  );
 }
 function toResponse(cached) {
   return new Response(cached.body, {
@@ -1994,22 +2018,25 @@ async function fetchWithCache(input, init, options = {}) {
   }
   const res = await fetch(input, init);
   const body = await res.text();
-  const record = {
-    timestamp: Date.now(),
-    status: res.status,
-    statusText: res.statusText,
-    headers: [...res.headers.entries()],
-    body
-  };
-  if (cacheMode === "memory") {
-    memoryCache.set(cacheKey, record);
-  } else if (cacheMode === "fs") {
-    await fs7.writeFile(filePath, JSON.stringify(record), "utf8");
+  const headers = sanitizeHeaders(res.headers);
+  if (res.ok) {
+    const record = {
+      timestamp: Date.now(),
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+      body
+    };
+    if (cacheMode === "memory") {
+      memoryCache.set(cacheKey, record);
+    } else if (cacheMode === "fs") {
+      await fs7.writeFile(filePath, JSON.stringify(record), "utf8");
+    }
   }
   return new Response(body, {
     status: res.status,
     statusText: res.statusText,
-    headers: res.headers
+    headers
   });
 }
 export {

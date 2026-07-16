@@ -17,11 +17,8 @@ import {
   VIRTUAL_LOCAL_TYPES_PREFIX,
 } from './constants';
 import { generateTypedPageHelper } from './page-helper-generator';
-import type {
-  HtPageInfo,
-  HtPageModule,
-  HtStructuredPageModule,
-} from './types';
+import { isStructuredPageModule } from './render-runtime';
+import type { HtPageInfo, HtPageModule } from './types';
 
 export type PageModuleLoader = (
   entryPath: string,
@@ -51,18 +48,7 @@ async function importPageModule(
   return normalizeLoadedPageModule(mod);
 }
 
-function isStructuredPageModule(
-  value: unknown,
-): value is HtStructuredPageModule {
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    'render' in value &&
-    typeof (value as { render?: unknown }).render === 'function'
-  );
-}
-
-function isLocalPageTypesImport(id: string): boolean {
+export function isLocalPageTypesImport(id: string): boolean {
   return /^\.\/\$types(?:\.[A-Za-z0-9_.-]+)?$/.test(id);
 }
 

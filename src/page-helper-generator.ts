@@ -1,6 +1,6 @@
 import type { HtPageInfo, RouteParamDefinition } from './types';
 
-function paramsTypeFromDefinitions(
+export function paramsTypeFromDefinitions(
   paramDefinitions: RouteParamDefinition[],
 ): string {
   if (paramDefinitions.length === 0) {

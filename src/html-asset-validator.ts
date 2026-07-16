@@ -45,10 +45,16 @@ function collectScriptSrcs(html: string): string[] {
 function collectStylesheetHrefs(html: string): string[] {
   const out: string[] = [];
 
-  for (const match of html.matchAll(
-    /<link\b[^>]*\brel=["']stylesheet["'][^>]*\bhref=["']([^"']+)["'][^>]*>/gi,
-  )) {
-    out.push(match[1]);
+  // Match attributes independently so <link href=".." rel="stylesheet">
+  // is detected regardless of attribute order.
+  for (const match of html.matchAll(/<link\b[^>]*>/gi)) {
+    const tag = match[0];
+
+    if (!/\brel=["']?stylesheet["']?/i.test(tag)) continue;
+
+    const href = tag.match(/\bhref=["']([^"']+)["']/i);
+
+    if (href) out.push(href[1]);
   }
 
   return out;

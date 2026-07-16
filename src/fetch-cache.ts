@@ -35,8 +35,26 @@ function createDefaultCacheKey(
   return createHash('sha256').update(raw).digest('hex');
 }
 
+const SAFE_FILE_KEY_RE = /^[A-Za-z0-9._-]{1,200}$/;
+
+function toSafeFileKey(cacheKey: string): string {
+  // User-supplied cache keys must not be able to escape the cache
+  // directory (e.g. "../../evil"). Keys with anything beyond simple
+  // filename characters are hashed instead.
+  if (SAFE_FILE_KEY_RE.test(cacheKey)) {
+    return cacheKey;
+  }
+
+  return createHash('sha256').update(cacheKey).digest('hex');
+}
+
 function getCacheFilePath(cacheKey: string): string {
-  return path.join(process.cwd(), CACHE_DIR_NAME, 'fetch', `${cacheKey}.json`);
+  return path.join(
+    process.cwd(),
+    CACHE_DIR_NAME,
+    'fetch',
+    `${toSafeFileKey(cacheKey)}.json`,
+  );
 }
 
 function getEffectiveCacheMode(
@@ -47,6 +65,20 @@ function getEffectiveCacheMode(
   }
 
   return process.env.NODE_ENV === 'production' ? 'fs' : 'memory';
+}
+
+// The cached body is stored as decoded text, so headers describing the
+// original wire encoding would be wrong when the response is replayed.
+const BODY_ENCODING_HEADERS = new Set([
+  'content-encoding',
+  'content-length',
+  'transfer-encoding',
+]);
+
+function sanitizeHeaders(headers: Headers): [string, string][] {
+  return [...headers.entries()].filter(
+    ([name]) => !BODY_ENCODING_HEADERS.has(name.toLowerCase()),
+  );
 }
 
 function toResponse(cached: CachedResponseRecord): Response {
@@ -118,24 +150,29 @@ export async function fetchWithCache(
 
   const res = await fetch(input, init);
   const body = await res.text();
+  const headers = sanitizeHeaders(res.headers);
 
-  const record: CachedResponseRecord = {
-    timestamp: Date.now(),
-    status: res.status,
-    statusText: res.statusText,
-    headers: [...res.headers.entries()],
-    body,
-  };
+  // Never cache error responses; a transient upstream failure must not
+  // be served from cache until it expires.
+  if (res.ok) {
+    const record: CachedResponseRecord = {
+      timestamp: Date.now(),
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+      body,
+    };
 
-  if (cacheMode === 'memory') {
-    memoryCache.set(cacheKey, record);
-  } else if (cacheMode === 'fs') {
-    await fs.writeFile(filePath, JSON.stringify(record), 'utf8');
+    if (cacheMode === 'memory') {
+      memoryCache.set(cacheKey, record);
+    } else if (cacheMode === 'fs') {
+      await fs.writeFile(filePath, JSON.stringify(record), 'utf8');
+    }
   }
 
   return new Response(body, {
     status: res.status,
     statusText: res.statusText,
-    headers: res.headers,
+    headers,
   });
 }

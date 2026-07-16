@@ -3,7 +3,7 @@ import { normalizeFsPath, toPosix } from './path-utils';
 import { isDynamicPage, toRoutePattern } from './route-utils';
 import { extractRouteParamDefinitions } from './route-params';
 import type { HtPageInfo, HtPagesPluginOptions } from './types';
-import { PLUGIN_NAME } from './constants';
+import { DEFAULT_PAGE_EXTENSIONS, PLUGIN_NAME } from './constants';
 
 function buildDefaultIncludeGlobs(
   pagesDir: string,
@@ -25,7 +25,7 @@ export async function discoverEntryPages(
   const pagesDir = options.pagesDir ?? 'src';
   const pageExtensions = options.pageExtensions?.length
     ? options.pageExtensions
-    : ['.ht.js', '.html.js', '.ht.ts', '.html.ts', '.ht.jsx', '.html.jsx', '.ht.tsx', '.html.tsx'];
+    : DEFAULT_PAGE_EXTENSIONS;
 
   const include = Array.isArray(options.include)
     ? options.include
