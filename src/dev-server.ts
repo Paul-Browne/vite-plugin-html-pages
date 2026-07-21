@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { ViteDevServer } from 'vite';
 
 import { renderPage } from './render-runtime';
+import { matchDynamicPage } from './route-utils';
 import type { HtPageInfo } from './types';
 import { PLUGIN_NAME } from './constants';
 import { createPageModuleLoader } from './module-loader';
@@ -102,7 +103,7 @@ export function installDevServer(args: {
   getPages: () => Promise<HtPageInfo[]>;
   getEntries?: () => Promise<HtPageInfo[]>;
 }) {
-  const { server, root, pagesDir, getPages } = args;
+  const { server, root, pagesDir, getPages, getEntries } = args;
   const loaderPromise = createPageModuleLoader({
     mode: 'dev',
     root,
@@ -131,9 +132,19 @@ export function installDevServer(args: {
       }
 
       const pages = await getPages();
-      const page = pages.find(
+
+      // Exact matches (static pages and routes pre-listed by
+      // generateStaticParams) take precedence.
+      let page = pages.find(
         (p) => normalizeRoutePath(p.routePath) === url,
       );
+
+      // Fall back to matching dynamic route patterns so pages like
+      // blog/[slug].ht.js render on demand in dev, even for params not
+      // listed by generateStaticParams.
+      if (!page && getEntries) {
+        page = matchDynamicPage(await getEntries(), url) ?? undefined;
+      }
 
       if (!page) {
         return next();

@@ -6,9 +6,11 @@ import {
   fillParams,
   getParamNames,
   isDynamicPage,
+  matchDynamicPage,
   routeMatch,
   toRoutePattern,
 } from '../src/route-utils';
+import type { HtPageInfo } from '../src/types';
 
 const EXTENSIONS = [
   '.ht.js',
@@ -194,6 +196,75 @@ describe('routeMatch', () => {
     expect(routeMatch('/docs/*?:path', '/docs/a/b')).toEqual({
       path: ['a', 'b'],
     });
+  });
+});
+
+describe('matchDynamicPage', () => {
+  function makeEntry(
+    routePattern: string,
+    dynamic = true,
+  ): HtPageInfo {
+    return {
+      id: `/project/src${routePattern}.ht.js`,
+      entryPath: `/project/src${routePattern}.ht.js`,
+      absolutePath: `/project/src${routePattern}.ht.js`,
+      relativePath: `src${routePattern}.ht.js`,
+      routePattern,
+      routePath: routePattern,
+      fileName: '',
+      dynamic,
+      paramNames: [],
+      paramDefinitions: [],
+      params: {},
+    };
+  }
+
+  it('matches a single-param pattern and fills params', () => {
+    const entry = makeEntry('/blog/:slug');
+
+    const page = matchDynamicPage([entry], '/blog/hello');
+
+    expect(page).not.toBeNull();
+    expect(page?.routePath).toBe('/blog/hello');
+    expect(page?.params).toEqual({ slug: 'hello' });
+    expect(page?.entryPath).toBe(entry.entryPath);
+  });
+
+  it('matches catch-all patterns with array params', () => {
+    const page = matchDynamicPage(
+      [makeEntry('/docs/*:path')],
+      '/docs/api/auth',
+    );
+
+    expect(page?.params).toEqual({ path: ['api', 'auth'] });
+  });
+
+  it('prefers more specific patterns when several match', () => {
+    const catchAll = makeEntry('/blog/*:path');
+    const single = makeEntry('/blog/:slug');
+
+    const page = matchDynamicPage([catchAll, single], '/blog/hello');
+
+    expect(page?.routePattern).toBe('/blog/:slug');
+    expect(page?.params).toEqual({ slug: 'hello' });
+  });
+
+  it('ignores non-dynamic entries', () => {
+    const page = matchDynamicPage(
+      [makeEntry('/about', false)],
+      '/about',
+    );
+
+    expect(page).toBeNull();
+  });
+
+  it('returns null when nothing matches', () => {
+    const page = matchDynamicPage(
+      [makeEntry('/blog/:slug')],
+      '/shop/item',
+    );
+
+    expect(page).toBeNull();
   });
 });
 

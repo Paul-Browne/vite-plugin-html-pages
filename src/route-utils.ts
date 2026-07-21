@@ -184,6 +184,37 @@ export function routeMatch(
   return a.length === b.length ? params : null;
 }
 
+/**
+ * Matches a URL against the dynamic route patterns of the given entries
+ * and returns a completed page info for the best match (static segments
+ * beat dynamic ones, dynamic beat catch-alls). Used by the dev server to
+ * render dynamic pages on demand, regardless of generateStaticParams.
+ */
+export function matchDynamicPage(
+  entries: HtPageInfo[],
+  urlPath: string,
+): HtPageInfo | null {
+  const candidates = entries
+    .filter((entry) => entry.dynamic)
+    .sort((a, b) => compareRoutePriority(a.routePattern, b.routePattern));
+
+  const normalizedUrl = normalizeRoutePath(urlPath);
+
+  for (const entry of candidates) {
+    const params = routeMatch(entry.routePattern, normalizedUrl);
+
+    if (params) {
+      return {
+        ...entry,
+        routePath: normalizedUrl,
+        params,
+      };
+    }
+  }
+
+  return null;
+}
+
 export function compareRoutePriority(a: string, b: string): number {
   const aSegs = normalizeRoutePath(a).split('/').filter(Boolean);
   const bSegs = normalizeRoutePath(b).split('/').filter(Boolean);

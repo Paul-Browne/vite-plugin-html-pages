@@ -512,6 +512,50 @@ function expandStaticPaths(basePage, rows, cleanUrls) {
     };
   });
 }
+function routeMatch(pattern, urlPath) {
+  const a = normalizeRoutePath(pattern).split("/").filter(Boolean);
+  const b = normalizeRoutePath(urlPath).split("/").filter(Boolean);
+  const params = {};
+  for (let i = 0; i < a.length; i++) {
+    const patternSeg = a[i];
+    const urlSeg = b[i];
+    if (patternSeg.startsWith("*?:")) {
+      const key = patternSeg.slice(3);
+      if (i < b.length) {
+        params[key] = b.slice(i).map(decodeURIComponent);
+      }
+      return params;
+    }
+    if (patternSeg.startsWith("*:")) {
+      const rest = b.slice(i);
+      if (rest.length === 0) return null;
+      params[patternSeg.slice(2)] = rest.map(decodeURIComponent);
+      return params;
+    }
+    if (!urlSeg) return null;
+    if (patternSeg.startsWith(":")) {
+      params[patternSeg.slice(1)] = decodeURIComponent(urlSeg);
+      continue;
+    }
+    if (patternSeg !== urlSeg) return null;
+  }
+  return a.length === b.length ? params : null;
+}
+function matchDynamicPage(entries, urlPath) {
+  const candidates = entries.filter((entry) => entry.dynamic).sort((a, b) => compareRoutePriority(a.routePattern, b.routePattern));
+  const normalizedUrl = normalizeRoutePath(urlPath);
+  for (const entry of candidates) {
+    const params = routeMatch(entry.routePattern, normalizedUrl);
+    if (params) {
+      return {
+        ...entry,
+        routePath: normalizedUrl,
+        params
+      };
+    }
+  }
+  return null;
+}
 function compareRoutePriority(a, b) {
   const aSegs = normalizeRoutePath(a).split("/").filter(Boolean);
   const bSegs = normalizeRoutePath(b).split("/").filter(Boolean);
@@ -987,7 +1031,7 @@ function rewriteRootAssetUrlsInDevHtml(html, root, pagesDir) {
   );
 }
 function installDevServer(args) {
-  const { server, root, pagesDir, getPages } = args;
+  const { server, root, pagesDir, getPages, getEntries } = args;
   const loaderPromise = createPageModuleLoader({
     mode: "dev",
     root,
@@ -1008,9 +1052,12 @@ function installDevServer(args) {
         return next();
       }
       const pages = await getPages();
-      const page = pages.find(
+      let page = pages.find(
         (p) => normalizeRoutePath2(p.routePath) === url
       );
+      if (!page && getEntries) {
+        page = matchDynamicPage(await getEntries(), url) ?? void 0;
+      }
       if (!page) {
         return next();
       }

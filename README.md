@@ -64,7 +64,7 @@ That's the whole mental model. Everything else is convenience on top.
 - **Typed pages** — per-route param types inferred from the filename
 - **Smart asset pipeline** — JS/TS/CSS referenced by your HTML is bundled and minified; server-only code never leaks into `dist`
 - **Asset validation** — broken `<script src>` / stylesheet links fail the build
-- **Real dev server** — pages render on request with Vite HMR-style full reload and readable error frames
+- **Real dev server** — pages render on request (dynamic routes included, no `generateStaticParams` needed in dev) with full reload and readable error frames
 - **Parallel static generation** — renders large sites concurrently
 - **`404.html`, `sitemap.xml`, RSS** — generated for you
 
@@ -418,6 +418,10 @@ htmlPages({ missingAssets: 'warn' })
 
 - Pages render **on request** through Vite's SSR module runner — edit a
   page, its `data()`, or any imported module and reload.
+- **Dynamic routes render on demand.** Visit `/blog/anything` and
+  `blog/[slug].ht.js` renders with `params.slug = 'anything'` — no need
+  to list every param in `generateStaticParams` while developing.
+  (`vite build` still only emits the pages you list there.)
 - File changes inside your pages directory trigger an automatic
   **full-reload** in the browser.
 - Errors show a **source-mapped code frame** in the terminal pointing
