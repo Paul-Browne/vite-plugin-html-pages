@@ -16,6 +16,7 @@ import {
   RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX,
   VIRTUAL_LOCAL_TYPES_PREFIX,
 } from './constants';
+import { brand } from './brand';
 import { generateTypedPageHelper } from './page-helper-generator';
 import { isStructuredPageModule } from './render-runtime';
 import type { HtPageInfo, HtPageModule } from './types';
@@ -38,8 +39,10 @@ async function importPageModule(
 
   if (!isRunnableDevEnvironment(environment)) {
     throw new Error(
-      '[vite-plugin-html-pages] The Vite SSR environment is not runnable. ' +
-        'A RunnableDevEnvironment is required to evaluate page modules.',
+      brand(
+        'The Vite SSR environment is not runnable. ' +
+          'A RunnableDevEnvironment is required to evaluate page modules.',
+      ),
     );
   }
 
@@ -175,7 +178,7 @@ export async function createPageModuleLoader(args: {
 
   if (mode === 'dev') {
     if (!server) {
-      throw new Error('[vite-plugin-html-pages] dev server not available');
+      throw new Error(brand('dev server not available'));
     }
 
     return {
@@ -186,9 +189,7 @@ export async function createPageModuleLoader(args: {
   }
 
   if (!getPages) {
-    throw new Error(
-      '[vite-plugin-html-pages] getPages is required in build mode',
-    );
+    throw new Error(brand('getPages is required in build mode'));
   }
 
   const configMode = args.configMode ?? 'production';

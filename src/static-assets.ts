@@ -3,6 +3,7 @@ import path from 'node:path';
 import fg from 'fast-glob';
 import * as esbuild from 'esbuild';
 import fsSync from 'node:fs';
+import { brand } from './brand';
 
 export interface StaticAssetFile {
   absolutePath: string;
@@ -173,10 +174,12 @@ export async function buildProcessedStaticAssets(args: {
                 if (!warnedMissingAssets.has(resolveArgs.path)) {
                   warnedMissingAssets.add(resolveArgs.path);
                   console.warn(
-                    `[vite-plugin-html-pages] ⚠️ Missing CSS asset: ${resolveArgs.path}\n` +
-                    `  Looked in:\n` +
-                    `  - ${fromSrc}\n` +
-                    `  - ${fromPublic}`
+                    brand(
+                      `⚠️ Missing CSS asset: ${resolveArgs.path}\n` +
+                        `  Looked in:\n` +
+                        `  - ${fromSrc}\n` +
+                        `  - ${fromPublic}`,
+                    ),
                   );
                 }
       

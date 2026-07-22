@@ -500,6 +500,7 @@ htmlPages({
 | `missingAssets` | `'error'` | `'error'` or `'warn'` for broken asset references |
 | `mapOutputPath` | — | `(page) => string` to customize output filenames |
 | `generatedTypesDir` | `'.vite-plugin-html-pages/types'` | Where generated page helper `.d.ts` files are written |
+| `displayName` | `'vite-plugin-html-pages'` | Label used in console / overlay messages (e.g. `[sitelo]`) |
 | `renderConcurrency` | `8` | Pages rendered in parallel |
 | `renderBatchSize` | `max(concurrency, 32)` | Pages per render batch |
 | `debug` | `false` | Verbose logging of discovery, routing, and emission |

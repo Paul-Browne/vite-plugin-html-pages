@@ -4,7 +4,7 @@ import {
   fileNameFromRoute,
 } from './route-utils';
 import type { HtPageInfo, HtPageModule } from './types';
-import { PLUGIN_NAME } from './constants';
+import { brand } from './brand';
 
 export async function buildPageIndex(args: {
   entries: HtPageInfo[];
@@ -27,8 +27,10 @@ export async function buildPageIndex(args: {
 
       if (paramRows.length === 0) {
         console.warn(
-          `[${PLUGIN_NAME}] ⚠️ Dynamic page "${entry.relativePath}" generated no routes. ` +
-            `Export generateStaticParams() returning at least one params object to emit pages for it.`,
+          brand(
+            `⚠️ Dynamic page "${entry.relativePath}" generated no routes. ` +
+              `Export generateStaticParams() returning at least one params object to emit pages for it.`,
+          ),
         );
       }
 
@@ -67,7 +69,9 @@ export async function buildPageIndex(args: {
 
     if (existing) {
       throw new Error(
-        `[${PLUGIN_NAME}] Duplicate route generated: "${page.routePath}" from "${existing.relativePath}" and "${page.relativePath}"`,
+        brand(
+          `Duplicate route generated: "${page.routePath}" from "${existing.relativePath}" and "${page.relativePath}"`,
+        ),
       );
     }
 

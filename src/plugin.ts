@@ -41,6 +41,7 @@ import {
   type StaticAssetFile,
 } from './static-assets';
 import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
+import { brand, getDisplayName, setDisplayName } from './brand';
 
 let hasWarnedESM = false;
 
@@ -56,7 +57,9 @@ function warnIfNotESM(root: string) {
 
     if (pkg.type !== 'module') {
       console.warn(
-        `[${PLUGIN_NAME}] ⚠️ It is recommended to add "type": "module" to your package.json for optimal performance and to avoid Node ESM warnings.`,
+        brand(
+          '⚠️ It is recommended to add "type": "module" to your package.json for optimal performance and to avoid Node ESM warnings.',
+        ),
       );
     }
   } catch {
@@ -155,6 +158,8 @@ type BuildPipeline = {
 };
 
 export function htPages(options: HtPagesPluginOptions = {}): Plugin {
+  setDisplayName(options.displayName);
+
   let root = process.cwd();
   let server: ViteDevServer | null = null;
   let devPages: HtPageInfo[] = [];
@@ -171,7 +176,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
 
   function logDebug(enabled: boolean | undefined, ...args: unknown[]) {
     if (!enabled) return;
-    console.log(`[${PLUGIN_NAME}]`, ...args);
+    console.log(`[${getDisplayName()}]`, ...args);
   }
 
   async function loadDevPages(): Promise<HtPageInfo[]> {
@@ -413,6 +418,7 @@ export {
     },
 
     configResolved(resolved) {
+      setDisplayName(options.displayName);
       root = options.root ? path.resolve(resolved.root, options.root) : resolved.root;
       userConfigFile = resolved.configFile ?? undefined;
       resolvedMode = resolved.mode;
@@ -560,7 +566,7 @@ export {
 
                 if (!mod) {
                   throw new Error(
-                    `[${PLUGIN_NAME}] Missing module for page entry: ${page.entryPath}`,
+                    brand(`Missing module for page entry: ${page.entryPath}`),
                   );
                 }
 
@@ -732,7 +738,7 @@ export {
             })
             .join('\n');
 
-          const rssXml = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n  <title>${escapeXml(rss.title ?? PLUGIN_NAME)}</title>\n  <link>${escapeXml(rssSite)}</link>\n  <description>${escapeXml(rss.description ?? 'RSS feed')}</description>\n${rssItems}\n</channel>\n</rss>\n`;
+          const rssXml = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n  <title>${escapeXml(rss.title ?? getDisplayName())}</title>\n  <link>${escapeXml(rssSite)}</link>\n  <description>${escapeXml(rss.description ?? 'RSS feed')}</description>\n${rssItems}\n</channel>\n</rss>\n`;
 
           this.emitFile({
             type: 'asset',

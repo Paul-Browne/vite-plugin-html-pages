@@ -3,7 +3,8 @@ import { normalizeFsPath, toPosix } from './path-utils';
 import { isDynamicPage, toRoutePattern } from './route-utils';
 import { extractRouteParamDefinitions } from './route-params';
 import type { HtPageInfo, HtPagesPluginOptions } from './types';
-import { DEFAULT_PAGE_EXTENSIONS, PLUGIN_NAME } from './constants';
+import { DEFAULT_PAGE_EXTENSIONS } from './constants';
+import { brand } from './brand';
 
 function buildDefaultIncludeGlobs(
   pagesDir: string,
@@ -59,7 +60,7 @@ export async function discoverEntryPages(
         relativeFromPagesDir === '..'
       ) {
         throw new Error(
-          `[${PLUGIN_NAME}] Page is outside pagesDir: ${entryPath} (pagesDir: ${pagesDir})`,
+          brand(`Page is outside pagesDir: ${entryPath} (pagesDir: ${pagesDir})`),
         );
       }
 

@@ -84,6 +84,12 @@ interface HtPagesPluginOptions {
      * `.d.ts` files are written. Defaults to `.vite-plugin-html-pages/types`.
      */
     generatedTypesDir?: string;
+    /**
+     * Label used in console, terminal, and overlay messages
+     * (e.g. `[sitelo]`). Defaults to `vite-plugin-html-pages`.
+     * Does not change the Vite plugin identity used for dedupe.
+     */
+    displayName?: string;
 }
 type RouteParamDefinition = {
     name: string;

@@ -1,4 +1,5 @@
 import { invalidHtmlReturn, pageError, missingDefaultExport } from './errors';
+import { brand } from './brand';
 import { validateStaticJsxTree } from './react-static-validation';
 import type {
   HtPageInfo,
@@ -88,7 +89,9 @@ async function ensureReactAvailable(page: HtPageInfo): Promise<void> {
     await import('react-dom/server');
   } catch {
     throw new Error(
-      `[vite-plugin-html-pages] ${page.relativePath}: TSX/JSX page rendering requires "react" and "react-dom" to be installed in the consuming app.`,
+      brand(
+        `${page.relativePath}: TSX/JSX page rendering requires "react" and "react-dom" to be installed in the consuming app.`,
+      ),
     );
   }
 }

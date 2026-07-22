@@ -612,6 +612,18 @@ function extractRouteParamDefinitions(routePattern) {
   return routePattern.split("/").filter(Boolean).map((segment) => parseRouteParamSegment(segment)).filter((value) => value != null);
 }
 
+// src/brand.ts
+var currentDisplayName = PLUGIN_NAME;
+function setDisplayName(name) {
+  currentDisplayName = name?.trim() || PLUGIN_NAME;
+}
+function getDisplayName() {
+  return currentDisplayName;
+}
+function brand(message) {
+  return `[${currentDisplayName}] ${message}`;
+}
+
 // src/discover.ts
 function buildDefaultIncludeGlobs(pagesDir, pageExtensions) {
   return pageExtensions.map((ext) => {
@@ -638,7 +650,7 @@ async function discoverEntryPages(root, options) {
     const relativeFromPagesDir = toPosix(path4.relative(pagesRoot, entryPath));
     if (relativeFromPagesDir.startsWith("../") || relativeFromPagesDir === "..") {
       throw new Error(
-        `[${PLUGIN_NAME}] Page is outside pagesDir: ${entryPath} (pagesDir: ${pagesDir})`
+        brand(`Page is outside pagesDir: ${entryPath} (pagesDir: ${pagesDir})`)
       );
     }
     const dynamic = isDynamicPage(relativeFromPagesDir);
@@ -668,16 +680,20 @@ import path6 from "path";
 function invalidHtmlReturn(page, value) {
   const type = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
   return new Error(
-    `[vite-plugin-html-pages] ${page.relativePath}: page render must return a string or a JSX/React renderable value, but received ${type}.`
+    brand(
+      `${page.relativePath}: page render must return a string or a JSX/React renderable value, but received ${type}.`
+    )
   );
 }
 function missingDefaultExport(page) {
   return new Error(
-    `[${PLUGIN_NAME}] Page "${page.relativePath}" does not export a default renderer`
+    brand(`Page "${page.relativePath}" does not export a default renderer`)
   );
 }
 function pageError(page, cause) {
-  const message = `[${PLUGIN_NAME}] Failed to render "${page.relativePath}" at route "${page.routePath}"`;
+  const message = brand(
+    `Failed to render "${page.relativePath}" at route "${page.routePath}"`
+  );
   if (cause instanceof Error) {
     const err = new Error(`${message}: ${cause.message}`);
     if (cause.stack) {
@@ -721,7 +737,9 @@ async function validateStaticJsxTree(node, ctx) {
       const elementName = getElementName(el.type);
       warnOnce(
         `${ctx.page.routePath}:${elementName}:${key}`,
-        `[vite-plugin-html-pages] ${ctx.page.relativePath ?? ctx.page.routePath}: prop "${key}" on ${elementName} will not be interactive in static TSX/JSX output. Use a client script or future hydration/islands support instead.`,
+        brand(
+          `${ctx.page.relativePath ?? ctx.page.routePath}: prop "${key}" on ${elementName} will not be interactive in static TSX/JSX output. Use a client script or future hydration/islands support instead.`
+        ),
         ctx.onWarn
       );
     }
@@ -793,7 +811,9 @@ async function ensureReactAvailable(page) {
     await import("react-dom/server");
   } catch {
     throw new Error(
-      `[vite-plugin-html-pages] ${page.relativePath}: TSX/JSX page rendering requires "react" and "react-dom" to be installed in the consuming app.`
+      brand(
+        `${page.relativePath}: TSX/JSX page rendering requires "react" and "react-dom" to be installed in the consuming app.`
+      )
     );
   }
 }
@@ -845,7 +865,9 @@ async function importPageModule(server, url) {
   const environment = server.environments.ssr;
   if (!isRunnableDevEnvironment(environment)) {
     throw new Error(
-      "[vite-plugin-html-pages] The Vite SSR environment is not runnable. A RunnableDevEnvironment is required to evaluate page modules."
+      brand(
+        "The Vite SSR environment is not runnable. A RunnableDevEnvironment is required to evaluate page modules."
+      )
     );
   }
   const mod = await environment.runner.import(url);
@@ -939,7 +961,7 @@ async function createPageModuleLoader(args) {
   const { mode, root, server, getPages } = args;
   if (mode === "dev") {
     if (!server) {
-      throw new Error("[vite-plugin-html-pages] dev server not available");
+      throw new Error(brand("dev server not available"));
     }
     return {
       loadModule: async (_entryPath, relativePath) => importPageModule(server, `/${relativePath}`),
@@ -948,9 +970,7 @@ async function createPageModuleLoader(args) {
     };
   }
   if (!getPages) {
-    throw new Error(
-      "[vite-plugin-html-pages] getPages is required in build mode"
-    );
+    throw new Error(brand("getPages is required in build mode"));
   }
   const configMode = args.configMode ?? "production";
   const { userConfig, userPlugins } = await loadUserConfig({
@@ -1084,7 +1104,9 @@ function installDevServer(args) {
       res.end(transformedHtml);
     } catch (error) {
       server.config.logger.error(
-        `[${PLUGIN_NAME}] dev server render failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
+        brand(
+          `dev server render failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
+        )
       );
       next(error);
     }
@@ -1240,7 +1262,9 @@ async function buildPageIndex(args) {
       const paramRows = Array.isArray(rows) ? rows : [];
       if (paramRows.length === 0) {
         console.warn(
-          `[${PLUGIN_NAME}] \u26A0\uFE0F Dynamic page "${entry.relativePath}" generated no routes. Export generateStaticParams() returning at least one params object to emit pages for it.`
+          brand(
+            `\u26A0\uFE0F Dynamic page "${entry.relativePath}" generated no routes. Export generateStaticParams() returning at least one params object to emit pages for it.`
+          )
         );
       }
       pages.push(
@@ -1274,7 +1298,9 @@ async function buildPageIndex(args) {
     const existing = seenRoutes.get(page.routePath);
     if (existing) {
       throw new Error(
-        `[${PLUGIN_NAME}] Duplicate route generated: "${page.routePath}" from "${existing.relativePath}" and "${page.relativePath}"`
+        brand(
+          `Duplicate route generated: "${page.routePath}" from "${existing.relativePath}" and "${page.relativePath}"`
+        )
       );
     }
     seenRoutes.set(page.routePath, page);
@@ -1397,10 +1423,12 @@ async function buildProcessedStaticAssets(args) {
               if (!warnedMissingAssets.has(resolveArgs.path)) {
                 warnedMissingAssets.add(resolveArgs.path);
                 console.warn(
-                  `[vite-plugin-html-pages] \u26A0\uFE0F Missing CSS asset: ${resolveArgs.path}
+                  brand(
+                    `\u26A0\uFE0F Missing CSS asset: ${resolveArgs.path}
   Looked in:
   - ${fromSrc}
   - ${fromPublic}`
+                  )
                 );
               }
               return {
@@ -1433,7 +1461,9 @@ function warnIfNotESM(root) {
     const pkg = JSON.parse(fs6.readFileSync(pkgPath, "utf8"));
     if (pkg.type !== "module") {
       console.warn(
-        `[${PLUGIN_NAME}] \u26A0\uFE0F It is recommended to add "type": "module" to your package.json for optimal performance and to avoid Node ESM warnings.`
+        brand(
+          '\u26A0\uFE0F It is recommended to add "type": "module" to your package.json for optimal performance and to avoid Node ESM warnings.'
+        )
       );
     }
   } catch {
@@ -1505,6 +1535,7 @@ function isHtJsxImporter(importer) {
   return isHtJsxFile(normalized);
 }
 function htPages(options = {}) {
+  setDisplayName(options.displayName);
   let root = process.cwd();
   let server = null;
   let devPages = [];
@@ -1517,7 +1548,7 @@ function htPages(options = {}) {
   const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : DEFAULT_PAGE_EXTENSIONS;
   function logDebug(enabled, ...args) {
     if (!enabled) return;
-    console.log(`[${PLUGIN_NAME}]`, ...args);
+    console.log(`[${getDisplayName()}]`, ...args);
   }
   async function loadDevPages() {
     const entries = await discoverEntryPages(root, options);
@@ -1705,6 +1736,7 @@ export {
       };
     },
     configResolved(resolved) {
+      setDisplayName(options.displayName);
       root = options.root ? path9.resolve(resolved.root, options.root) : resolved.root;
       userConfigFile = resolved.configFile ?? void 0;
       resolvedMode = resolved.mode;
@@ -1811,7 +1843,7 @@ export {
                 const mod = modulesByEntry.get(page.entryPath);
                 if (!mod) {
                   throw new Error(
-                    `[${PLUGIN_NAME}] Missing module for page entry: ${page.entryPath}`
+                    brand(`Missing module for page entry: ${page.entryPath}`)
                   );
                 }
                 const html = await renderPage(page, mod, false);
@@ -1946,7 +1978,7 @@ ${sitemapRoutes.map(
           const rssXml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
 <channel>
-  <title>${escapeXml(rss.title ?? PLUGIN_NAME)}</title>
+  <title>${escapeXml(rss.title ?? getDisplayName())}</title>
   <link>${escapeXml(rssSite)}</link>
   <description>${escapeXml(rss.description ?? "RSS feed")}</description>
 ${rssItems}

@@ -5,7 +5,7 @@ import type { ViteDevServer } from 'vite';
 import { renderPage } from './render-runtime';
 import { matchDynamicPage } from './route-utils';
 import type { HtPageInfo } from './types';
-import { PLUGIN_NAME } from './constants';
+import { brand } from './brand';
 import { createPageModuleLoader } from './module-loader';
 
 function isStaticAssetRequest(url: string): boolean {
@@ -176,9 +176,11 @@ export function installDevServer(args: {
       res.end(transformedHtml);
     } catch (error) {
       server.config.logger.error(
-        `[${PLUGIN_NAME}] dev server render failed: ${
-          error instanceof Error ? error.stack ?? error.message : String(error)
-        }`,
+        brand(
+          `dev server render failed: ${
+            error instanceof Error ? error.stack ?? error.message : String(error)
+          }`,
+        ),
       );
 
       next(error as Error);
