@@ -135,21 +135,25 @@ async function listFilesRecursive(dir: string): Promise<string[]> {
     await removeEmptyDirectories(path.dirname(normalizedDir), normalizedStopAt);
   }
 
-export function getGeneratedTypesRoot(root: string): string {
-  return normalizeFsPath(path.join(root, '.vite-plugin-html-pages', 'types'));
+export function getGeneratedTypesRoot(
+  root: string,
+  generatedTypesDir = '.vite-plugin-html-pages/types',
+): string {
+  return normalizeFsPath(path.join(root, generatedTypesDir));
 }
 
 export function getGeneratedHelperPath(args: {
   root: string;
   pagesDir: string;
   page: HtPageInfo;
+  generatedTypesDir?: string;
 }): string {
   const pagesRoot = normalizeFsPath(path.join(args.root, args.pagesDir));
   const relativeFromPagesDir = toPosix(
     path.relative(pagesRoot, args.page.absolutePath),
   );
   const withoutExt = stripPageExtension(relativeFromPagesDir);
-  const outRoot = getGeneratedTypesRoot(args.root);
+  const outRoot = getGeneratedTypesRoot(args.root, args.generatedTypesDir);
   const fileName = getTypesFileName(args.page);
 
   return normalizeFsPath(
@@ -160,8 +164,9 @@ export function getGeneratedHelperPath(args: {
 async function removeStalePageTypeDeclarations(args: {
   root: string;
   expectedFiles: Set<string>;
+  generatedTypesDir?: string;
 }): Promise<void> {
-  const outRoot = getGeneratedTypesRoot(args.root);
+  const outRoot = getGeneratedTypesRoot(args.root, args.generatedTypesDir);
   const existingFiles = await listFilesRecursive(outRoot);
 
   const staleFiles = existingFiles.filter((file) => {
@@ -184,8 +189,9 @@ export async function writePageTypeDeclarations(args: {
   root: string;
   pagesDir: string;
   entries: HtPageInfo[];
+  generatedTypesDir?: string;
 }): Promise<void> {
-  const outRoot = getGeneratedTypesRoot(args.root);
+  const outRoot = getGeneratedTypesRoot(args.root, args.generatedTypesDir);
 
   await fs.mkdir(outRoot, { recursive: true });
 
@@ -195,6 +201,7 @@ export async function writePageTypeDeclarations(args: {
       root: args.root,
       pagesDir: args.pagesDir,
       page,
+      generatedTypesDir: args.generatedTypesDir,
     }),
   }));
 
@@ -212,5 +219,6 @@ export async function writePageTypeDeclarations(args: {
   await removeStalePageTypeDeclarations({
     root: args.root,
     expectedFiles,
+    generatedTypesDir: args.generatedTypesDir,
   });
 }

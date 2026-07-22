@@ -182,6 +182,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       root,
       pagesDir,
       entries,
+      generatedTypesDir: options.generatedTypesDir,
     });
   
     const modulesByEntry = new Map<string, HtPageModule>();
@@ -228,6 +229,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       root,
       pagesDir,
       entries,
+      generatedTypesDir: options.generatedTypesDir,
     });
 
     const loader = await createPageModuleLoader({

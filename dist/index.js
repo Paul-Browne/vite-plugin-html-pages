@@ -209,8 +209,8 @@ async function removeEmptyDirectories(dir, stopAt) {
   await fs.rmdir(normalizedDir);
   await removeEmptyDirectories(path2.dirname(normalizedDir), normalizedStopAt);
 }
-function getGeneratedTypesRoot(root) {
-  return normalizeFsPath(path2.join(root, ".vite-plugin-html-pages", "types"));
+function getGeneratedTypesRoot(root, generatedTypesDir = ".vite-plugin-html-pages/types") {
+  return normalizeFsPath(path2.join(root, generatedTypesDir));
 }
 function getGeneratedHelperPath(args) {
   const pagesRoot = normalizeFsPath(path2.join(args.root, args.pagesDir));
@@ -218,14 +218,14 @@ function getGeneratedHelperPath(args) {
     path2.relative(pagesRoot, args.page.absolutePath)
   );
   const withoutExt = stripPageExtension(relativeFromPagesDir);
-  const outRoot = getGeneratedTypesRoot(args.root);
+  const outRoot = getGeneratedTypesRoot(args.root, args.generatedTypesDir);
   const fileName = getTypesFileName(args.page);
   return normalizeFsPath(
     path2.join(outRoot, path2.dirname(withoutExt), fileName)
   );
 }
 async function removeStalePageTypeDeclarations(args) {
-  const outRoot = getGeneratedTypesRoot(args.root);
+  const outRoot = getGeneratedTypesRoot(args.root, args.generatedTypesDir);
   const existingFiles = await listFilesRecursive(outRoot);
   const staleFiles = existingFiles.filter((file) => {
     if (!file.endsWith(".d.ts")) {
@@ -241,14 +241,15 @@ async function removeStalePageTypeDeclarations(args) {
   );
 }
 async function writePageTypeDeclarations(args) {
-  const outRoot = getGeneratedTypesRoot(args.root);
+  const outRoot = getGeneratedTypesRoot(args.root, args.generatedTypesDir);
   await fs.mkdir(outRoot, { recursive: true });
   const outputs = args.entries.map((page) => ({
     page,
     outFile: getGeneratedHelperPath({
       root: args.root,
       pagesDir: args.pagesDir,
-      page
+      page,
+      generatedTypesDir: args.generatedTypesDir
     })
   }));
   const expectedFiles = new Set(
@@ -262,7 +263,8 @@ async function writePageTypeDeclarations(args) {
   );
   await removeStalePageTypeDeclarations({
     root: args.root,
-    expectedFiles
+    expectedFiles,
+    generatedTypesDir: args.generatedTypesDir
   });
 }
 
@@ -1522,7 +1524,8 @@ function htPages(options = {}) {
     await writePageTypeDeclarations({
       root,
       pagesDir,
-      entries
+      entries,
+      generatedTypesDir: options.generatedTypesDir
     });
     const modulesByEntry = /* @__PURE__ */ new Map();
     logDebug(
@@ -1557,7 +1560,8 @@ function htPages(options = {}) {
     await writePageTypeDeclarations({
       root,
       pagesDir,
-      entries
+      entries,
+      generatedTypesDir: options.generatedTypesDir
     });
     const loader = await createPageModuleLoader({
       mode: "build",

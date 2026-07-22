@@ -94,6 +94,11 @@ export interface HtPagesPluginOptions {
     routePrefix?: string;
   };
   mapOutputPath?: (page: HtPageInfo) => string;
+  /**
+   * Directory (relative to project root) where generated page helper
+   * `.d.ts` files are written. Defaults to `.vite-plugin-html-pages/types`.
+   */
+  generatedTypesDir?: string;
 }
 
 export type RouteParamDefinition = {
