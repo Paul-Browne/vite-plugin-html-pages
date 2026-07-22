@@ -858,19 +858,23 @@ async function renderPage(page, mod, dev = false) {
 import path5 from "path";
 import {
   createServer,
-  isRunnableDevEnvironment,
   loadConfigFromFile
 } from "vite";
-async function importPageModule(server, url) {
+function getSsrModuleRunner(server) {
   const environment = server.environments.ssr;
-  if (!isRunnableDevEnvironment(environment)) {
+  const runner = environment?.runner;
+  if (!runner || typeof runner.import !== "function") {
     throw new Error(
       brand(
         "The Vite SSR environment is not runnable. A RunnableDevEnvironment is required to evaluate page modules."
       )
     );
   }
-  const mod = await environment.runner.import(url);
+  return runner;
+}
+async function importPageModule(server, url) {
+  const runner = getSsrModuleRunner(server);
+  const mod = await runner.import(url);
   return normalizeLoadedPageModule(mod);
 }
 function isLocalPageTypesImport(id) {

@@ -1,7 +1,6 @@
 import path from 'node:path';
 import {
   createServer,
-  isRunnableDevEnvironment,
   loadConfigFromFile,
   type InlineConfig,
   type Plugin,
@@ -31,13 +30,19 @@ export interface PageModuleLoaderHandle {
   close: () => Promise<void>;
 }
 
-async function importPageModule(
-  server: ViteDevServer,
-  url: string,
-): Promise<HtPageModule> {
-  const environment = server.environments.ssr;
+/**
+ * Duck-type the SSR environment instead of `isRunnableDevEnvironment`
+ * (instanceof). Sitelo and the plugin can resolve different Vite copies
+ * when linked locally, which makes instanceof fail even when a runner exists.
+ */
+function getSsrModuleRunner(server: ViteDevServer) {
+  const environment = server.environments.ssr as
+    | { runner?: { import: (url: string) => Promise<unknown> } }
+    | undefined;
 
-  if (!isRunnableDevEnvironment(environment)) {
+  const runner = environment?.runner;
+
+  if (!runner || typeof runner.import !== 'function') {
     throw new Error(
       brand(
         'The Vite SSR environment is not runnable. ' +
@@ -46,7 +51,15 @@ async function importPageModule(
     );
   }
 
-  const mod = await environment.runner.import(url);
+  return runner;
+}
+
+async function importPageModule(
+  server: ViteDevServer,
+  url: string,
+): Promise<HtPageModule> {
+  const runner = getSsrModuleRunner(server);
+  const mod = await runner.import(url);
 
   return normalizeLoadedPageModule(mod);
 }
