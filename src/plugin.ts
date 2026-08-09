@@ -467,6 +467,7 @@ export {
         server,
         root,
         pagesDir,
+        options,
         getPages: async () => {
           if (devPages.length > 0) return devPages;
           return loadDevPages();

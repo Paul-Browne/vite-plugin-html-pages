@@ -90,6 +90,17 @@ interface HtPagesPluginOptions {
      * Does not change the Vite plugin identity used for dedupe.
      */
     displayName?: string;
+    /**
+     * Inject a small dev-only toolbar on rendered pages (route, source file,
+     * params, island count, copy debug info). Default `true`. Production
+     * builds never include it.
+     */
+    devToolbar?: boolean;
+    /**
+     * Docs URL shown in the dev toolbar. Defaults to sitelo docs when
+     * `displayName` is `"sitelo"`, otherwise the plugin GitHub repo.
+     */
+    devToolbarDocsUrl?: string;
 }
 type RouteParamDefinition = {
     name: string;

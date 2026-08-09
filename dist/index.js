@@ -1,7 +1,7 @@
 // src/plugin.ts
 import fs6 from "fs";
 import path9 from "path";
-import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
+import { fileURLToPath as fileURLToPath3, pathToFileURL } from "url";
 import { transform as esbuildTransform } from "esbuild";
 import pLimit from "p-limit";
 
@@ -675,6 +675,7 @@ async function discoverEntryPages(root, options) {
 // src/dev-server.ts
 import fs3 from "fs";
 import path6 from "path";
+import { fileURLToPath as fileURLToPath2 } from "url";
 
 // src/errors.ts
 function invalidHtmlReturn(page, value) {
@@ -1013,7 +1014,141 @@ async function createPageModuleLoader(args) {
   };
 }
 
+// src/dev-toolbar.ts
+var DEFAULT_DOCS_BY_NAME = {
+  sitelo: "https://sitelo.js.org/docs"
+};
+function resolveDevToolbarEnabled(options) {
+  return options.devToolbar !== false;
+}
+function resolveDevToolbarDocsUrl(options) {
+  if (options.devToolbarDocsUrl) return options.devToolbarDocsUrl;
+  const name = (options.displayName ?? getDisplayName()).toLowerCase();
+  return DEFAULT_DOCS_BY_NAME[name] ?? "https://github.com/paul-browne/vite-plugin-html-pages";
+}
+function buildDevToolbarInfo(args) {
+  const displayName = args.options.displayName ?? getDisplayName();
+  return {
+    displayName,
+    routePath: args.page.routePath,
+    routePattern: args.page.routePattern,
+    relativePath: args.page.relativePath,
+    params: args.page.params ?? {},
+    docsUrl: resolveDevToolbarDocsUrl(args.options),
+    pluginVersion: args.pluginVersion
+  };
+}
+function injectDevToolbar(html, info) {
+  const payload = JSON.stringify(info).replace(/</g, "\\u003c");
+  const snippet = `${toolbarStyles()}<script type="module" data-html-pages-dev-toolbar>${toolbarClient(payload)}</script>`;
+  if (/<\/body>/i.test(html)) {
+    return html.replace(/<\/body>/i, `${snippet}</body>`);
+  }
+  return `${html}${snippet}`;
+}
+function toolbarStyles() {
+  return `<style data-html-pages-dev-toolbar>
+#hp-dev-toolbar{position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:2147483646;display:flex;align-items:center;gap:.5rem;max-width:min(96vw,52rem);padding:.4rem .65rem;border:1px solid rgba(255,255,255,.14);border-radius:999px;background:rgba(18,18,22,.92);color:#f4f4f5;font:12px/1.3 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.35);backdrop-filter:blur(8px)}
+#hp-dev-toolbar[hidden]{display:none!important}
+#hp-dev-toolbar button,#hp-dev-toolbar a{appearance:none;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;text-decoration:none;padding:.2rem .45rem;border-radius:999px}
+#hp-dev-toolbar button:hover,#hp-dev-toolbar a:hover{background:rgba(255,255,255,.1)}
+#hp-dev-toolbar .hp-brand{font-weight:650;letter-spacing:.01em;color:#a5b4fc}
+#hp-dev-toolbar .hp-sep{opacity:.35}
+#hp-dev-toolbar .hp-meta{opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:14rem}
+#hp-dev-toolbar .hp-pill{background:rgba(255,255,255,.08);padding:.15rem .5rem;border-radius:999px;white-space:nowrap}
+#hp-dev-toolbar .hp-actions{display:flex;align-items:center;gap:.15rem;margin-left:.15rem}
+@media (max-width:640px){#hp-dev-toolbar .hp-hide-sm{display:none}}
+</style>`;
+}
+function toolbarClient(payloadJson) {
+  return `
+(() => {
+  const STORAGE_KEY = 'html-pages:dev-toolbar:hidden';
+  if (globalThis.sessionStorage?.getItem(STORAGE_KEY) === '1') return;
+
+  const info = ${payloadJson};
+  const islands = document.querySelectorAll('[data-sitelo-island]');
+  const params = info.params && typeof info.params === 'object' ? info.params : {};
+  const paramEntries = Object.entries(params).filter(([, v]) => v != null && v !== '');
+  const paramText = paramEntries.length
+    ? paramEntries.map(([k, v]) => k + '=' + (Array.isArray(v) ? v.join('/') : String(v))).join(' ')
+    : '';
+
+  const root = document.createElement('div');
+  root.id = 'hp-dev-toolbar';
+  root.setAttribute('role', 'region');
+  root.setAttribute('aria-label', info.displayName + ' dev toolbar');
+
+  root.innerHTML = [
+    '<span class="hp-brand">' + escapeHtml(info.displayName) + '</span>',
+    '<span class="hp-sep">\xB7</span>',
+    '<span class="hp-meta" title="' + escapeAttr(info.routePattern) + '">' + escapeHtml(info.routePath) + '</span>',
+    '<span class="hp-sep hp-hide-sm">\xB7</span>',
+    '<span class="hp-meta hp-hide-sm" title="source">' + escapeHtml(info.relativePath) + '</span>',
+    paramText ? '<span class="hp-pill hp-hide-sm" title="params">' + escapeHtml(paramText) + '</span>' : '',
+    '<span class="hp-pill" title="server islands on this page">' + islands.length + ' island' + (islands.length === 1 ? '' : 's') + '</span>',
+    '<span class="hp-actions">',
+    '<button type="button" data-hp-copy title="Copy debug info">Copy</button>',
+    '<a href="' + escapeAttr(info.docsUrl) + '" target="_blank" rel="noopener">Docs</a>',
+    '<button type="button" data-hp-hide title="Hide for this tab">\u2715</button>',
+    '</span>',
+  ].join('');
+
+  document.documentElement.appendChild(root);
+
+  root.querySelector('[data-hp-copy]')?.addEventListener('click', async () => {
+    const text = [
+      info.displayName + ' debug info',
+      'route: ' + info.routePath,
+      'pattern: ' + info.routePattern,
+      'file: ' + info.relativePath,
+      'params: ' + JSON.stringify(params),
+      'islands: ' + islands.length,
+      'plugin: ' + info.pluginVersion,
+      'url: ' + location.href,
+      'userAgent: ' + navigator.userAgent,
+    ].join('\\n');
+
+    try {
+      await navigator.clipboard.writeText(text);
+      const btn = root.querySelector('[data-hp-copy]');
+      if (btn) {
+        const prev = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.textContent = prev; }, 1200);
+      }
+    } catch {
+      console.info(text);
+    }
+  });
+
+  root.querySelector('[data-hp-hide]')?.addEventListener('click', () => {
+    globalThis.sessionStorage?.setItem(STORAGE_KEY, '1');
+    root.hidden = true;
+  });
+
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;');
+  }
+
+  function escapeAttr(value) {
+    return escapeHtml(value).replaceAll("'", '&#39;');
+  }
+})();
+`;
+}
+
 // src/dev-server.ts
+var PLUGIN_VERSION = JSON.parse(
+  fs3.readFileSync(
+    path6.join(path6.dirname(fileURLToPath2(import.meta.url)), "../package.json"),
+    "utf8"
+  )
+).version;
 function isStaticAssetRequest(url) {
   return url.endsWith(".css") || url.endsWith(".js") || url.endsWith(".mjs") || url.endsWith(".ts") || url.endsWith(".png") || url.endsWith(".jpg") || url.endsWith(".jpeg") || url.endsWith(".gif") || url.endsWith(".svg") || url.endsWith(".webp") || url.endsWith(".ico") || url.endsWith(".woff") || url.endsWith(".woff2") || url.endsWith(".ttf") || url.endsWith(".otf");
 }
@@ -1057,7 +1192,8 @@ function rewriteRootAssetUrlsInDevHtml(html, root, pagesDir) {
   );
 }
 function installDevServer(args) {
-  const { server, root, pagesDir, getPages, getEntries } = args;
+  const { server, root, pagesDir, options, getPages, getEntries } = args;
+  const toolbarEnabled = resolveDevToolbarEnabled(options);
   const loaderPromise = createPageModuleLoader({
     mode: "dev",
     root,
@@ -1098,11 +1234,21 @@ function installDevServer(args) {
         root,
         pagesDir
       );
-      const transformedHtml = await server.transformIndexHtml(
+      let transformedHtml = await server.transformIndexHtml(
         url,
         devHtml,
         req.originalUrl
       );
+      if (toolbarEnabled) {
+        transformedHtml = injectDevToolbar(
+          transformedHtml,
+          buildDevToolbarInfo({
+            page,
+            options,
+            pluginVersion: PLUGIN_VERSION
+          })
+        );
+      }
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.end(transformedHtml);
@@ -1457,7 +1603,7 @@ async function buildProcessedStaticAssets(args) {
 
 // src/plugin.ts
 var hasWarnedESM = false;
-var pluginDir = path9.dirname(fileURLToPath2(import.meta.url));
+var pluginDir = path9.dirname(fileURLToPath3(import.meta.url));
 function warnIfNotESM(root) {
   try {
     const pkgPath = path9.join(root, "package.json");
@@ -1779,6 +1925,7 @@ export {
         server,
         root,
         pagesDir,
+        options,
         getPages: async () => {
           if (devPages.length > 0) return devPages;
           return loadDevPages();

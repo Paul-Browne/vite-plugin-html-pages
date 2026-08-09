@@ -1,12 +1,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ViteDevServer } from 'vite';
+import { fileURLToPath } from 'node:url';
 
 import { renderPage } from './render-runtime';
 import { matchDynamicPage } from './route-utils';
-import type { HtPageInfo } from './types';
+import type { HtPageInfo, HtPagesPluginOptions } from './types';
 import { brand } from './brand';
 import { createPageModuleLoader } from './module-loader';
+import {
+  buildDevToolbarInfo,
+  injectDevToolbar,
+  resolveDevToolbarEnabled,
+} from './dev-toolbar';
+
+const PLUGIN_VERSION = JSON.parse(
+  fs.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '../package.json'),
+    'utf8',
+  ),
+).version as string;
 
 function isStaticAssetRequest(url: string): boolean {
   return (
@@ -100,10 +113,12 @@ export function installDevServer(args: {
   server: ViteDevServer;
   root: string;
   pagesDir: string;
+  options: HtPagesPluginOptions;
   getPages: () => Promise<HtPageInfo[]>;
   getEntries?: () => Promise<HtPageInfo[]>;
 }) {
-  const { server, root, pagesDir, getPages, getEntries } = args;
+  const { server, root, pagesDir, options, getPages, getEntries } = args;
+  const toolbarEnabled = resolveDevToolbarEnabled(options);
   const loaderPromise = createPageModuleLoader({
     mode: 'dev',
     root,
@@ -165,11 +180,22 @@ export function installDevServer(args: {
         pagesDir,
       );
       
-      const transformedHtml = await server.transformIndexHtml(
+      let transformedHtml = await server.transformIndexHtml(
         url,
         devHtml,
         req.originalUrl,
       );
+
+      if (toolbarEnabled) {
+        transformedHtml = injectDevToolbar(
+          transformedHtml,
+          buildDevToolbarInfo({
+            page,
+            options,
+            pluginVersion: PLUGIN_VERSION,
+          }),
+        );
+      }
 
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
