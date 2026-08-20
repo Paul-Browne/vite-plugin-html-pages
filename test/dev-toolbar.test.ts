@@ -54,7 +54,8 @@ describe('dev toolbar', () => {
 
     expect(html).toContain('data-html-pages-dev-toolbar');
     expect(html).toContain('hp-dev-toolbar');
-    expect(html).toContain('data-hp-viewport');
+    expect(html).toContain('data-hp-vp-btn');
+    expect(html).toContain('hp-viewport-frame');
     expect(html).toContain('/blog/hello');
     expect(html).toContain('src/blog/[slug].ht.js');
     expect(html).not.toMatch(

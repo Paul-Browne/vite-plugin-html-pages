@@ -81,10 +81,12 @@ function toolbarStyles(): string {
 #hp-dev-toolbar .hp-pill{background:rgba(255,255,255,.08);padding:.15rem .5rem;border-radius:999px;white-space:nowrap}
 #hp-dev-toolbar .hp-actions{display:flex;align-items:center;gap:.15rem;margin-left:.15rem}
 @media (max-width:640px){#hp-dev-toolbar .hp-hide-sm{display:none}}
-html[data-hp-viewport="mobile"],html[data-hp-viewport="tablet"]{background:#111114}
-html[data-hp-viewport="mobile"] body,html[data-hp-viewport="tablet"] body{margin-inline:auto;min-height:100vh;box-shadow:0 0 0 1px rgba(255,255,255,.08),0 0 48px rgba(0,0,0,.35)}
-html[data-hp-viewport="mobile"] body{max-width:390px}
-html[data-hp-viewport="tablet"] body{max-width:768px}
+html[data-hp-vp="mobile"],html[data-hp-vp="tablet"]{background:#111114!important;height:100%}
+html[data-hp-vp="mobile"] body,html[data-hp-vp="tablet"] body{margin:0;height:100%;overflow:hidden;background:#111114}
+html[data-hp-vp="mobile"] body>:not(#hp-viewport-frame),html[data-hp-vp="tablet"] body>:not(#hp-viewport-frame){display:none!important}
+#hp-viewport-frame{position:fixed;top:0;left:50%;transform:translateX(-50%);height:100%;border:0;z-index:2147483645;background:#111114;box-shadow:0 0 0 1px rgba(255,255,255,.08),0 0 48px rgba(0,0,0,.35)}
+html[data-hp-vp="mobile"] #hp-viewport-frame{width:390px}
+html[data-hp-vp="tablet"] #hp-viewport-frame{width:768px}
 </style>`;
 }
 
@@ -92,12 +94,14 @@ function toolbarClient(payloadJson: string): string {
   // Keep this self-contained: no imports, works as an inline module.
   return `
 (() => {
+  // Preview iframes should render the page only — no nested toolbar.
+  if (window !== window.top) return;
+
   const STORAGE_KEY = 'html-pages:dev-toolbar:hidden';
   const VIEWPORT_KEY = 'html-pages:dev-toolbar:viewport';
   if (globalThis.sessionStorage?.getItem(STORAGE_KEY) === '1') return;
 
   const info = ${payloadJson};
-  const islands = document.querySelectorAll('[data-sitelo-island]');
   const params = info.params && typeof info.params === 'object' ? info.params : {};
   const paramEntries = Object.entries(params).filter(([, v]) => v != null && v !== '');
   const paramText = paramEntries.length
@@ -105,9 +109,9 @@ function toolbarClient(payloadJson: string): string {
     : '';
 
   const VIEWPORTS = [
-    { id: 'desktop', label: 'Desktop' },
-    { id: 'tablet', label: 'Tablet' },
-    { id: 'mobile', label: 'Mobile' },
+    { id: 'desktop', label: 'Desktop', width: null },
+    { id: 'tablet', label: 'Tablet', width: 768 },
+    { id: 'mobile', label: 'Mobile', width: 390 },
   ];
   let viewportIndex = VIEWPORTS.findIndex(
     (v) => v.id === globalThis.sessionStorage?.getItem(VIEWPORT_KEY),
@@ -124,9 +128,9 @@ function toolbarClient(payloadJson: string): string {
     '<span class="hp-sep hp-hide-sm">·</span>',
     '<span class="hp-meta hp-hide-sm" title="source">' + escapeHtml(info.relativePath) + '</span>',
     paramText ? '<span class="hp-pill hp-hide-sm" title="params">' + escapeHtml(paramText) + '</span>' : '',
-    '<span class="hp-pill" title="server islands on this page">' + islands.length + ' island' + (islands.length === 1 ? '' : 's') + '</span>',
+    '<span class="hp-pill" data-hp-islands title="server islands on this page">0 islands</span>',
     '<span class="hp-actions">',
-    '<button type="button" data-hp-viewport title="Cycle viewport size">Desktop</button>',
+    '<button type="button" data-hp-vp-btn title="Cycle viewport size">Desktop</button>',
     '<button type="button" data-hp-copy title="Copy debug info">Copy</button>',
     '<a href="' + escapeAttr(info.docsUrl) + '" target="_blank" rel="noopener">Docs</a>',
     '<button type="button" data-hp-hide title="Hide for this tab">✕</button>',
@@ -135,16 +139,73 @@ function toolbarClient(payloadJson: string): string {
 
   document.documentElement.appendChild(root);
 
-  const viewportBtn = root.querySelector('[data-hp-viewport]');
+  const viewportBtn = root.querySelector('[data-hp-vp-btn]');
+  const islandsPill = root.querySelector('[data-hp-islands]');
+
+  function countIslands(doc) {
+    return doc.querySelectorAll('[data-sitelo-island]').length;
+  }
+
+  function setIslandsLabel(n) {
+    if (!islandsPill) return;
+    islandsPill.textContent = n + ' island' + (n === 1 ? '' : 's');
+  }
+
+  setIslandsLabel(countIslands(document));
+
+  function removeFrame() {
+    document.getElementById('hp-viewport-frame')?.remove();
+  }
+
+  function ensureFrame() {
+    let frame = document.getElementById('hp-viewport-frame');
+    if (frame) return frame;
+
+    frame = document.createElement('iframe');
+    frame.id = 'hp-viewport-frame';
+    frame.title = 'Viewport preview';
+    frame.src = location.href;
+    frame.addEventListener('load', () => {
+      try {
+        const doc = frame.contentDocument;
+        if (doc) setIslandsLabel(countIslands(doc));
+      } catch {
+        /* cross-origin — ignore */
+      }
+    });
+    document.body.appendChild(frame);
+    return frame;
+  }
 
   function applyViewport() {
     const mode = VIEWPORTS[viewportIndex];
-    document.documentElement.setAttribute('data-hp-viewport', mode.id);
     globalThis.sessionStorage?.setItem(VIEWPORT_KEY, mode.id);
+    document.documentElement.setAttribute('data-hp-vp', mode.id);
+
     if (viewportBtn) {
       viewportBtn.textContent = mode.label;
       viewportBtn.title = 'Viewport: ' + mode.label + ' (click to cycle)';
     }
+
+    if (!mode.width) {
+      const frame = document.getElementById('hp-viewport-frame');
+      let nextHref = null;
+      try {
+        const href = frame?.contentWindow?.location?.href;
+        if (href && href !== location.href) nextHref = href;
+      } catch {
+        /* ignore */
+      }
+      removeFrame();
+      document.documentElement.removeAttribute('data-hp-vp');
+      setIslandsLabel(countIslands(document));
+      if (nextHref) {
+        location.href = nextHref;
+      }
+      return;
+    }
+
+    ensureFrame();
   }
 
   applyViewport();
@@ -161,7 +222,7 @@ function toolbarClient(payloadJson: string): string {
       'pattern: ' + info.routePattern,
       'file: ' + info.relativePath,
       'params: ' + JSON.stringify(params),
-      'islands: ' + islands.length,
+      'islands: ' + (islandsPill?.textContent ?? ''),
       'viewport: ' + VIEWPORTS[viewportIndex].id,
       'plugin: ' + info.pluginVersion,
       'url: ' + location.href,
