@@ -1058,12 +1058,17 @@ function toolbarStyles() {
 #hp-dev-toolbar .hp-pill{background:rgba(255,255,255,.08);padding:.15rem .5rem;border-radius:999px;white-space:nowrap}
 #hp-dev-toolbar .hp-actions{display:flex;align-items:center;gap:.15rem;margin-left:.15rem}
 @media (max-width:640px){#hp-dev-toolbar .hp-hide-sm{display:none}}
+html[data-hp-viewport="mobile"],html[data-hp-viewport="tablet"]{background:#111114}
+html[data-hp-viewport="mobile"] body,html[data-hp-viewport="tablet"] body{margin-inline:auto;min-height:100vh;box-shadow:0 0 0 1px rgba(255,255,255,.08),0 0 48px rgba(0,0,0,.35)}
+html[data-hp-viewport="mobile"] body{max-width:390px}
+html[data-hp-viewport="tablet"] body{max-width:768px}
 </style>`;
 }
 function toolbarClient(payloadJson) {
   return `
 (() => {
   const STORAGE_KEY = 'html-pages:dev-toolbar:hidden';
+  const VIEWPORT_KEY = 'html-pages:dev-toolbar:viewport';
   if (globalThis.sessionStorage?.getItem(STORAGE_KEY) === '1') return;
 
   const info = ${payloadJson};
@@ -1074,6 +1079,16 @@ function toolbarClient(payloadJson) {
     ? paramEntries.map(([k, v]) => k + '=' + (Array.isArray(v) ? v.join('/') : String(v))).join(' ')
     : '';
 
+  const VIEWPORTS = [
+    { id: 'desktop', label: 'Desktop' },
+    { id: 'tablet', label: 'Tablet' },
+    { id: 'mobile', label: 'Mobile' },
+  ];
+  let viewportIndex = VIEWPORTS.findIndex(
+    (v) => v.id === globalThis.sessionStorage?.getItem(VIEWPORT_KEY),
+  );
+  if (viewportIndex < 0) viewportIndex = 0;
+
   const root = document.createElement('div');
   root.id = 'hp-dev-toolbar';
   root.setAttribute('role', 'region');
@@ -1081,13 +1096,12 @@ function toolbarClient(payloadJson) {
 
   root.innerHTML = [
     '<span class="hp-brand">' + escapeHtml(info.displayName) + '</span>',
-    '<span class="hp-sep">\xB7</span>',
-    '<span class="hp-meta" title="' + escapeAttr(info.routePattern) + '">' + escapeHtml(info.routePath) + '</span>',
     '<span class="hp-sep hp-hide-sm">\xB7</span>',
     '<span class="hp-meta hp-hide-sm" title="source">' + escapeHtml(info.relativePath) + '</span>',
     paramText ? '<span class="hp-pill hp-hide-sm" title="params">' + escapeHtml(paramText) + '</span>' : '',
     '<span class="hp-pill" title="server islands on this page">' + islands.length + ' island' + (islands.length === 1 ? '' : 's') + '</span>',
     '<span class="hp-actions">',
+    '<button type="button" data-hp-viewport title="Cycle viewport size">Desktop</button>',
     '<button type="button" data-hp-copy title="Copy debug info">Copy</button>',
     '<a href="' + escapeAttr(info.docsUrl) + '" target="_blank" rel="noopener">Docs</a>',
     '<button type="button" data-hp-hide title="Hide for this tab">\u2715</button>',
@@ -1095,6 +1109,25 @@ function toolbarClient(payloadJson) {
   ].join('');
 
   document.documentElement.appendChild(root);
+
+  const viewportBtn = root.querySelector('[data-hp-viewport]');
+
+  function applyViewport() {
+    const mode = VIEWPORTS[viewportIndex];
+    document.documentElement.setAttribute('data-hp-viewport', mode.id);
+    globalThis.sessionStorage?.setItem(VIEWPORT_KEY, mode.id);
+    if (viewportBtn) {
+      viewportBtn.textContent = mode.label;
+      viewportBtn.title = 'Viewport: ' + mode.label + ' (click to cycle)';
+    }
+  }
+
+  applyViewport();
+
+  viewportBtn?.addEventListener('click', () => {
+    viewportIndex = (viewportIndex + 1) % VIEWPORTS.length;
+    applyViewport();
+  });
 
   root.querySelector('[data-hp-copy]')?.addEventListener('click', async () => {
     const text = [
@@ -1104,6 +1137,7 @@ function toolbarClient(payloadJson) {
       'file: ' + info.relativePath,
       'params: ' + JSON.stringify(params),
       'islands: ' + islands.length,
+      'viewport: ' + VIEWPORTS[viewportIndex].id,
       'plugin: ' + info.pluginVersion,
       'url: ' + location.href,
       'userAgent: ' + navigator.userAgent,

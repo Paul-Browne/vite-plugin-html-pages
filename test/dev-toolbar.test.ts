@@ -54,8 +54,12 @@ describe('dev toolbar', () => {
 
     expect(html).toContain('data-html-pages-dev-toolbar');
     expect(html).toContain('hp-dev-toolbar');
+    expect(html).toContain('data-hp-viewport');
     expect(html).toContain('/blog/hello');
     expect(html).toContain('src/blog/[slug].ht.js');
+    expect(html).not.toMatch(
+      /hp-meta[^>]*>\s*\/blog\/hello/,
+    );
     expect(html).toContain('"displayName":"sitelo"');
     expect(html.indexOf('data-html-pages-dev-toolbar')).toBeLessThan(
       html.indexOf('</body>'),
