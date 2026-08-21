@@ -60,10 +60,18 @@ function collectStylesheetHrefs(html: string): string[] {
   return out;
 }
 
+/** Drop documentation samples so example `import('/…')` strings aren't treated as assets. */
+function stripCodeSampleMarkup(html: string): string {
+  return html
+    .replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, '')
+    .replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, '');
+}
+
 function collectLiteralDynamicImports(html: string): string[] {
   const out: string[] = [];
+  const withoutSamples = stripCodeSampleMarkup(html);
 
-  for (const match of html.matchAll(
+  for (const match of withoutSamples.matchAll(
     /import\s*\(\s*["']([^"'`]+)["']\s*\)/gi,
   )) {
     out.push(match[1]);

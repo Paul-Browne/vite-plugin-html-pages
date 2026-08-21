@@ -1394,9 +1394,13 @@ function collectStylesheetHrefs(html) {
   }
   return out;
 }
+function stripCodeSampleMarkup(html) {
+  return html.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, "").replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, "");
+}
 function collectLiteralDynamicImports(html) {
   const out = [];
-  for (const match of html.matchAll(
+  const withoutSamples = stripCodeSampleMarkup(html);
+  for (const match of withoutSamples.matchAll(
     /import\s*\(\s*["']([^"'`]+)["']\s*\)/gi
   )) {
     out.push(match[1]);

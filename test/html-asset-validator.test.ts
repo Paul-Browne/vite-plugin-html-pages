@@ -86,6 +86,16 @@ describe('collectLocalAssetUrls', () => {
     expect(collectLocalAssetUrls(html)).toEqual(['/widgets/chart.js']);
   });
 
+  it('ignores dynamic imports inside code samples', () => {
+    const html = `
+      <p>See <code>import('/js/todo.js')</code> in the docs.</p>
+      <pre><code>body onload="import('/js/todo.js').then(…)"</code></pre>
+      <body onload="import('/app.js').then((m) => m.init())"></body>
+    `;
+
+    expect(collectLocalAssetUrls(html)).toEqual(['/app.js']);
+  });
+
   it('strips query strings and hashes', () => {
     const html = `<script src="/main.js?v=3#x"></script>`;
 
