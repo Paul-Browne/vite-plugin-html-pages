@@ -1728,7 +1728,9 @@ function chunkArray(items, size) {
   }
   return out;
 }
-var DEFAULT_404_HTML = `<!doctype html>
+function defaultNotFoundHtml(base) {
+  const home = base.endsWith("/") ? base : `${base}/`;
+  return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -1767,11 +1769,12 @@ var DEFAULT_404_HTML = `<!doctype html>
     <main>
       <h1>404</h1>
       <p>Page not found.</p>
-      <p><a href="/">Go back home</a></p>
+      <p><a href="${home}">Go back home</a></p>
     </main>
   </body>
 </html>
 `;
+}
 function isHtJsxFile(id) {
   return id.endsWith(".ht.jsx") || id.endsWith(".html.jsx") || id.endsWith(".ht.tsx") || id.endsWith(".html.tsx");
 }
@@ -1791,6 +1794,7 @@ function htPages(options = {}) {
   let watcherAttached = false;
   let userConfigFile;
   let resolvedMode = "production";
+  let resolvedBase = "/";
   let buildPipelinePromise = null;
   const cleanUrls = options.cleanUrls ?? true;
   const pagesDir = options.pagesDir ?? "src";
@@ -1989,6 +1993,7 @@ export {
       root = options.root ? path9.resolve(resolved.root, options.root) : resolved.root;
       userConfigFile = resolved.configFile ?? void 0;
       resolvedMode = resolved.mode;
+      resolvedBase = resolved.base || "/";
       if (!hasWarnedESM) {
         warnIfNotESM(root);
         hasWarnedESM = true;
@@ -2113,7 +2118,7 @@ export {
         const rendered404 = renderedPages.find(
           (rendered) => rendered.page.routePath === "/404"
         );
-        const notFoundHtml = rendered404?.html ?? DEFAULT_404_HTML;
+        const notFoundHtml = rendered404?.html ?? defaultNotFoundHtml(resolvedBase);
         logDebug(
           options.debug,
           rendered404 ? "generated 404.html from user page" : "generated default 404.html"

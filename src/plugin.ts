@@ -84,7 +84,17 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-const DEFAULT_404_HTML = `<!doctype html>
+/**
+ * Fallback 404 page, used when the project has no `src/404.ht.js`.
+ *
+ * The home link has to honour Vite's `base`: on a site served from
+ * `/repo/`, a hardcoded `/` sends the visitor to the host root rather
+ * than back into the site.
+ */
+export function defaultNotFoundHtml(base: string): string {
+  const home = base.endsWith('/') ? base : `${base}/`;
+
+  return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -123,11 +133,12 @@ const DEFAULT_404_HTML = `<!doctype html>
     <main>
       <h1>404</h1>
       <p>Page not found.</p>
-      <p><a href="/">Go back home</a></p>
+      <p><a href="${home}">Go back home</a></p>
     </main>
   </body>
 </html>
 `;
+}
 
 function isHtJsxFile(id: string): boolean {
   return (
@@ -166,6 +177,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   let watcherAttached = false;
   let userConfigFile: string | undefined;
   let resolvedMode = 'production';
+  let resolvedBase = '/';
   let buildPipelinePromise: Promise<BuildPipeline> | null = null;
 
   const cleanUrls = options.cleanUrls ?? true;
@@ -422,6 +434,7 @@ export {
       root = options.root ? path.resolve(resolved.root, options.root) : resolved.root;
       userConfigFile = resolved.configFile ?? undefined;
       resolvedMode = resolved.mode;
+      resolvedBase = resolved.base || '/';
 
       if (!hasWarnedESM) {
         warnIfNotESM(root);
@@ -591,7 +604,8 @@ export {
         const rendered404 = renderedPages.find(
           (rendered) => rendered.page.routePath === '/404',
         );
-        const notFoundHtml = rendered404?.html ?? DEFAULT_404_HTML;
+        const notFoundHtml =
+          rendered404?.html ?? defaultNotFoundHtml(resolvedBase);
 
         logDebug(
           options.debug,
