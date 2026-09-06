@@ -410,6 +410,26 @@ warning instead?
 htmlPages({ missingAssets: 'warn' })
 ```
 
+Literal `import('/x.js')` strings in the HTML are checked too, but only
+ever warn — a string in an attribute is a weaker signal than a `src`.
+Samples inside `<pre>` and `<code>` are ignored, so documenting a handler
+never pulls it into the check.
+
+#### Assets another plugin serves
+
+Some URLs have no file here to find: a sibling plugin answers them from
+its own package, or a proxy serves them in front of the site. Point
+`externalAssets` at those and they are skipped:
+
+```js
+htmlPages({ externalAssets: ['/su/'] })
+```
+
+A trailing slash makes an entry a directory prefix — `'/su/'` covers
+`/su/alert.js` — and anything else has to match the URL exactly, so
+`'/su'` will not quietly swallow `/super.js`. Query strings and hashes
+are ignored when matching.
+
 ---
 
 ## Dev server
@@ -498,6 +518,7 @@ htmlPages({
 | `site` | — | Base URL; enables `sitemap.xml` |
 | `rss` | — | RSS config (`site`, `title`, `description`, `routePrefix`) |
 | `missingAssets` | `'error'` | `'error'` or `'warn'` for broken asset references |
+| `externalAssets` | `[]` | Root-relative URL(s) another plugin serves; skipped by the missing-asset check |
 | `mapOutputPath` | — | `(page) => string` to customize output filenames |
 | `generatedTypesDir` | `'.vite-plugin-html-pages/types'` | Where generated page helper `.d.ts` files are written |
 | `displayName` | `'vite-plugin-html-pages'` | Label used in console / overlay messages (e.g. `[sitelo]`) |

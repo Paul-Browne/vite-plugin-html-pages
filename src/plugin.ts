@@ -593,6 +593,7 @@ export {
                   pluginName: PLUGIN_NAME,
                   pageLabel: page.relativePath,
                   missingAssets: options.missingAssets ?? 'error',
+                  externalAssets: options.externalAssets,
                 });
 
                 renderedPages.push({ page, html });

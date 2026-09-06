@@ -1367,6 +1367,16 @@ function stripQueryAndHash(url) {
 function isLocalRootUrl(url) {
   return !!url && url.startsWith("/") && !url.startsWith("//");
 }
+function matchesExternalAsset(url, patterns) {
+  const clean = stripQueryAndHash(url);
+  return patterns.some(
+    (pattern) => pattern.endsWith("/") ? clean.startsWith(pattern) : clean === pattern
+  );
+}
+function normalizeExternalAssets(value) {
+  const list = value == null ? [] : Array.isArray(value) ? value : [value];
+  return list.filter(Boolean).map((entry) => entry.startsWith("/") ? entry : `/${entry}`);
+}
 function fileExistsForPublicUrl(root, pagesDir, url) {
   const clean = stripQueryAndHash(url).slice(1);
   const fromSrc = path7.join(root, pagesDir, clean);
@@ -1451,12 +1461,15 @@ function validateHtmlAssetReferences(options) {
     html,
     pluginName,
     pageLabel,
-    missingAssets = "error"
+    missingAssets = "error",
+    externalAssets
   } = options;
-  const scriptSrcs = unique(collectScriptSrcs(html)).filter(isLocalRootUrl);
-  const stylesheetHrefs = unique(collectStylesheetHrefs(html)).filter(isLocalRootUrl);
+  const external = normalizeExternalAssets(externalAssets);
+  const isCheckable = (url) => isLocalRootUrl(url) && !matchesExternalAsset(url, external);
+  const scriptSrcs = unique(collectScriptSrcs(html)).filter(isCheckable);
+  const stylesheetHrefs = unique(collectStylesheetHrefs(html)).filter(isCheckable);
   const literalDynamicImports = unique(collectLiteralDynamicImports(html)).filter(
-    isLocalRootUrl
+    isCheckable
   );
   for (const url of scriptSrcs) {
     if (!fileExistsForPublicUrl(root, pagesDir, url)) {
@@ -2108,7 +2121,8 @@ export {
                   html,
                   pluginName: PLUGIN_NAME,
                   pageLabel: page.relativePath,
-                  missingAssets: options.missingAssets ?? "error"
+                  missingAssets: options.missingAssets ?? "error",
+                  externalAssets: options.externalAssets
                 });
                 renderedPages.push({ page, html });
               })

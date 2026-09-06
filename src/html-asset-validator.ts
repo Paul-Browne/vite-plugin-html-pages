@@ -8,6 +8,7 @@ export interface HtmlAssetValidationOptions {
   pluginName: string;
   pageLabel?: string;
   missingAssets?: 'error' | 'warn';
+  externalAssets?: string | string[];
 }
 
 function stripQueryAndHash(url: string): string {
@@ -16,6 +17,31 @@ function stripQueryAndHash(url: string): string {
 
 function isLocalRootUrl(url: string): boolean {
   return !!url && url.startsWith('/') && !url.startsWith('//');
+}
+
+/**
+ * URLs another plugin serves, which therefore have no file on disk here.
+ *
+ * A trailing slash makes an entry a directory prefix (`/su/` covers
+ * `/su/alert.js`); anything else has to match the URL exactly, so `/su`
+ * never quietly swallows `/super.js`.
+ */
+function matchesExternalAsset(url: string, patterns: string[]): boolean {
+  const clean = stripQueryAndHash(url);
+
+  return patterns.some((pattern) =>
+    pattern.endsWith('/') ? clean.startsWith(pattern) : clean === pattern,
+  );
+}
+
+function normalizeExternalAssets(value?: string | string[]): string[] {
+  const list = value == null ? [] : Array.isArray(value) ? value : [value];
+
+  // Root-relative is the only thing a page can reference this way, so a
+  // caller who left the slash off meant the same thing.
+  return list
+    .filter(Boolean)
+    .map((entry) => (entry.startsWith('/') ? entry : `/${entry}`));
 }
 
 function fileExistsForPublicUrl(root: string, pagesDir: string, url: string): boolean {
@@ -161,12 +187,23 @@ export function validateHtmlAssetReferences(
     pluginName,
     pageLabel,
     missingAssets = 'error',
+    externalAssets,
   } = options;
 
-  const scriptSrcs = unique(collectScriptSrcs(html)).filter(isLocalRootUrl);
-  const stylesheetHrefs = unique(collectStylesheetHrefs(html)).filter(isLocalRootUrl);
+  /*
+   * An asset another plugin serves has no file under `pagesDir` or
+   * `public/` to find, so checking for one only ever produces a false
+   * report. Applied to all three kinds: whatever serves the URL serves
+   * it whether a page reached it by `src`, `href`, or `import()`.
+   */
+  const external = normalizeExternalAssets(externalAssets);
+  const isCheckable = (url: string) =>
+    isLocalRootUrl(url) && !matchesExternalAsset(url, external);
+
+  const scriptSrcs = unique(collectScriptSrcs(html)).filter(isCheckable);
+  const stylesheetHrefs = unique(collectStylesheetHrefs(html)).filter(isCheckable);
   const literalDynamicImports = unique(collectLiteralDynamicImports(html)).filter(
-    isLocalRootUrl,
+    isCheckable,
   );
 
   for (const url of scriptSrcs) {

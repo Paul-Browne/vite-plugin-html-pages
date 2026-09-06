@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   collectLocalAssetUrls,
@@ -60,6 +60,123 @@ describe('validateHtmlAssetReferences', () => {
         missingAssets: 'error',
       }),
     ).toThrow(/missing\.js/);
+  });
+
+  it('exempts externalAssets from the missing-asset check', () => {
+    const root = makeFixtureRoot();
+
+    expect(() =>
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: `
+          <script src="/su/boot.js"></script>
+          <link rel="stylesheet" href="/su/theme.css">
+        `,
+        pluginName: 'test',
+        missingAssets: 'error',
+        externalAssets: '/su/',
+      }),
+    ).not.toThrow();
+  });
+
+  it('silences the literal dynamic import warning for externalAssets', () => {
+    const root = makeFixtureRoot();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: `<button onclick="import('/su/alert.js').then(m=>m.dismiss(this))"></button>`,
+        pluginName: 'test',
+        missingAssets: 'error',
+        externalAssets: ['/su/'],
+      });
+
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('still warns for a literal dynamic import outside externalAssets', () => {
+    const root = makeFixtureRoot();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: `<button onclick="import('/other/alert.js').then(m=>m.dismiss(this))"></button>`,
+        pluginName: 'test',
+        missingAssets: 'error',
+        externalAssets: ['/su/'],
+      });
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(/\/other\/alert\.js/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('treats an entry without a trailing slash as an exact match', () => {
+    const root = makeFixtureRoot();
+
+    // The exact URL is exempt...
+    expect(() =>
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: '<script src="/su.js"></script>',
+        pluginName: 'test',
+        missingAssets: 'error',
+        externalAssets: '/su.js',
+      }),
+    ).not.toThrow();
+
+    // ...but a URL that merely starts with it is not.
+    expect(() =>
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: '<script src="/su.js.map.js"></script>',
+        pluginName: 'test',
+        missingAssets: 'error',
+        externalAssets: '/su.js',
+      }),
+    ).toThrow(/su\.js\.map\.js/);
+  });
+
+  it('accepts an externalAssets entry written without a leading slash', () => {
+    const root = makeFixtureRoot();
+
+    expect(() =>
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: '<script src="/su/boot.js"></script>',
+        pluginName: 'test',
+        missingAssets: 'error',
+        externalAssets: 'su/',
+      }),
+    ).not.toThrow();
+  });
+
+  it('exempts an external asset carrying a query string', () => {
+    const root = makeFixtureRoot();
+
+    expect(() =>
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: '<script src="/su/boot.js?v=2"></script>',
+        pluginName: 'test',
+        missingAssets: 'error',
+        externalAssets: '/su/',
+      }),
+    ).not.toThrow();
   });
 })
 

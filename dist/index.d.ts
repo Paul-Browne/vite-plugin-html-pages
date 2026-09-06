@@ -72,6 +72,16 @@ interface HtPagesPluginOptions {
     renderBatchSize?: number;
     site?: string;
     missingAssets?: 'error' | 'warn';
+    /**
+     * Root-relative URLs that something other than this plugin serves —
+     * a sibling plugin's middleware, a reverse proxy — and which therefore
+     * have no file under `pagesDir` or `public/` to validate against.
+     * Exempted from the missing-asset check.
+     *
+     * A trailing slash makes an entry a directory prefix (`'/su/'` covers
+     * `/su/alert.js`); anything else must match the URL exactly.
+     */
+    externalAssets?: string | string[];
     rss?: {
         site: string;
         title?: string;
