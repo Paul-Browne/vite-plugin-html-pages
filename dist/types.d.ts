@@ -1,0 +1,131 @@
+type StaticParamPrimitive = string | number | boolean;
+type StaticParamValue = StaticParamPrimitive | StaticParamPrimitive[];
+interface StaticParamRecord {
+    [key: string]: StaticParamValue;
+}
+type HtPageParamValue = string | string[] | undefined;
+type HtPageParams = Record<string, HtPageParamValue>;
+interface HtPageInfo {
+    id: string;
+    entryPath: string;
+    absolutePath: string;
+    relativePath: string;
+    routePattern: string;
+    routePath: string;
+    fileName: string;
+    dynamic: boolean;
+    paramNames: string[];
+    paramDefinitions: RouteParamDefinition[];
+    params: HtPageParams;
+}
+type HtPageRenderResult = string | unknown;
+type HtPageRenderResultAsync = HtPageRenderResult | Promise<HtPageRenderResult>;
+type HtPageRenderContext = {
+    page: HtPageInfo;
+    params: HtPageParams;
+    data?: unknown;
+    dev: boolean;
+};
+interface HtStructuredPageModule<TData = unknown> {
+    render: (ctx: {
+        page: HtPageInfo;
+        params: HtPageParams;
+        data?: TData;
+        dev: boolean;
+    }) => HtPageRenderResultAsync;
+    data?: (ctx: {
+        page: HtPageInfo;
+        params: HtPageParams;
+        dev: boolean;
+    }) => TData | Promise<TData>;
+    generateStaticParams?: () => Array<StaticParamRecord> | Promise<Array<StaticParamRecord>>;
+    dynamic?: boolean;
+    prerender?: boolean;
+}
+interface HtPageModule {
+    default?: ((ctx: {
+        page: HtPageInfo;
+        params: HtPageParams;
+        data?: unknown;
+        dev: boolean;
+    }) => HtPageRenderResultAsync) | string | HtStructuredPageModule;
+    data?: (ctx: {
+        page: HtPageInfo;
+        params: HtPageParams;
+        dev: boolean;
+    }) => unknown | Promise<unknown>;
+    generateStaticParams?: () => Array<StaticParamRecord> | Promise<Array<StaticParamRecord>>;
+    dynamic?: boolean;
+    prerender?: boolean;
+}
+interface HtPagesPluginOptions {
+    root?: string;
+    include?: string | string[];
+    exclude?: string | string[];
+    pagesDir?: string;
+    pageExtensions?: string[];
+    cleanUrls?: boolean;
+    debug?: boolean;
+    renderConcurrency?: number;
+    renderBatchSize?: number;
+    site?: string;
+    missingAssets?: 'error' | 'warn';
+    /**
+     * Root-relative URLs that something other than this plugin serves —
+     * a sibling plugin's middleware, a reverse proxy — and which therefore
+     * have no file under `pagesDir` or `public/` to validate against.
+     * Exempted from the missing-asset check.
+     *
+     * A trailing slash makes an entry a directory prefix (`'/su/'` covers
+     * `/su/alert.js`); anything else must match the URL exactly.
+     */
+    externalAssets?: string | string[];
+    rss?: {
+        site: string;
+        title?: string;
+        description?: string;
+        routePrefix?: string;
+    };
+    mapOutputPath?: (page: HtPageInfo) => string;
+    /**
+     * Directory (relative to project root) where generated page helper
+     * `.d.ts` files are written. Defaults to `.vite-plugin-html-pages/types`.
+     */
+    generatedTypesDir?: string;
+    /**
+     * Label used in console, terminal, and overlay messages
+     * (e.g. `[sitelo]`). Defaults to `vite-plugin-html-pages`.
+     * Does not change the Vite plugin identity used for dedupe.
+     */
+    displayName?: string;
+    /**
+     * Inject a small dev-only toolbar on rendered pages (route, source file,
+     * params, island count, copy debug info). Default `true`. Production
+     * builds never include it.
+     */
+    devToolbar?: boolean;
+    /**
+     * Docs URL shown in the dev toolbar. Defaults to sitelo docs when
+     * `displayName` is `"sitelo"`, otherwise the plugin GitHub repo.
+     */
+    devToolbarDocsUrl?: string;
+}
+type RouteParamDefinition = {
+    name: string;
+    type: 'single' | 'catch-all' | 'optional-catch-all';
+};
+type Simplify<T> = {
+    [K in keyof T]: T[K];
+} & {};
+type Merge<A, B> = Simplify<A & B>;
+type SegmentParam<S extends string> = S extends `[...${infer Name}]?` ? {
+    [K in Name]?: string[];
+} : S extends `[...${infer Name}]` ? {
+    [K in Name]: string[];
+} : S extends `[${infer Name}]` ? {
+    [K in Name]: string;
+} : {};
+type RouteParamsInternal<Path extends string> = Path extends `${infer Head}/${infer Tail}` ? Merge<SegmentParam<Head>, RouteParamsInternal<Tail>> : SegmentParam<Path>;
+type RouteParams<Path extends string> = Path extends `/${infer Rest}` ? Simplify<RouteParamsInternal<Rest>> : Simplify<RouteParamsInternal<Path>>;
+
+export type { HtPageInfo, HtPageModule, HtPageParamValue, HtPageParams, HtPageRenderContext, HtPageRenderResult, HtPageRenderResultAsync, HtPagesPluginOptions, HtStructuredPageModule, RouteParamDefinition, RouteParams, StaticParamPrimitive, StaticParamRecord, StaticParamValue };

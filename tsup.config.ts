@@ -4,6 +4,7 @@ export default defineConfig({
   entry: [
     'src/index.ts',
     'src/page.ts',
+    'src/types.ts',
     'src/jsx-runtime.ts',
     'src/jsx-dev-runtime.ts',
   ],
