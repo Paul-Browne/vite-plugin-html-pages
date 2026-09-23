@@ -1,11 +1,11 @@
-type StaticParamPrimitive = string | number | boolean;
-type StaticParamValue = StaticParamPrimitive | StaticParamPrimitive[];
-interface StaticParamRecord {
+export type StaticParamPrimitive = string | number | boolean;
+export type StaticParamValue = StaticParamPrimitive | StaticParamPrimitive[];
+export interface StaticParamRecord {
     [key: string]: StaticParamValue;
 }
-type HtPageParamValue = string | string[] | undefined;
-type HtPageParams = Record<string, HtPageParamValue>;
-interface HtPageInfo {
+export type HtPageParamValue = string | string[] | undefined;
+export type HtPageParams = Record<string, HtPageParamValue>;
+export interface HtPageInfo {
     id: string;
     entryPath: string;
     absolutePath: string;
@@ -18,15 +18,15 @@ interface HtPageInfo {
     paramDefinitions: RouteParamDefinition[];
     params: HtPageParams;
 }
-type HtPageRenderResult = string | unknown;
-type HtPageRenderResultAsync = HtPageRenderResult | Promise<HtPageRenderResult>;
-type HtPageRenderContext = {
+export type HtPageRenderResult = string | unknown;
+export type HtPageRenderResultAsync = HtPageRenderResult | Promise<HtPageRenderResult>;
+export type HtPageRenderContext = {
     page: HtPageInfo;
     params: HtPageParams;
     data?: unknown;
     dev: boolean;
 };
-interface HtStructuredPageModule<TData = unknown> {
+export interface HtStructuredPageModule<TData = unknown> {
     render: (ctx: {
         page: HtPageInfo;
         params: HtPageParams;
@@ -42,7 +42,7 @@ interface HtStructuredPageModule<TData = unknown> {
     dynamic?: boolean;
     prerender?: boolean;
 }
-interface HtPageModule {
+export interface HtPageModule {
     default?: ((ctx: {
         page: HtPageInfo;
         params: HtPageParams;
@@ -58,7 +58,7 @@ interface HtPageModule {
     dynamic?: boolean;
     prerender?: boolean;
 }
-interface HtPagesPluginOptions {
+export interface HtPagesPluginOptions {
     root?: string;
     include?: string | string[];
     exclude?: string | string[];
@@ -110,7 +110,7 @@ interface HtPagesPluginOptions {
      */
     devToolbarDocsUrl?: string;
 }
-type RouteParamDefinition = {
+export type RouteParamDefinition = {
     name: string;
     type: 'single' | 'catch-all' | 'optional-catch-all';
 };
@@ -126,6 +126,5 @@ type SegmentParam<S extends string> = S extends `[...${infer Name}]?` ? {
     [K in Name]: string;
 } : {};
 type RouteParamsInternal<Path extends string> = Path extends `${infer Head}/${infer Tail}` ? Merge<SegmentParam<Head>, RouteParamsInternal<Tail>> : SegmentParam<Path>;
-type RouteParams<Path extends string> = Path extends `/${infer Rest}` ? Simplify<RouteParamsInternal<Rest>> : Simplify<RouteParamsInternal<Path>>;
-
-export type { HtPageInfo, HtPageModule, HtPageParamValue, HtPageParams, HtPageRenderContext, HtPageRenderResult, HtPageRenderResultAsync, HtPagesPluginOptions, HtStructuredPageModule, RouteParamDefinition, RouteParams, StaticParamPrimitive, StaticParamRecord, StaticParamValue };
+export type RouteParams<Path extends string> = Path extends `/${infer Rest}` ? Simplify<RouteParamsInternal<Rest>> : Simplify<RouteParamsInternal<Path>>;
+export {};

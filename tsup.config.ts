@@ -9,7 +9,8 @@ export default defineConfig({
     'src/jsx-dev-runtime.ts',
   ],
   format: ['esm'],
-  dts: true,
+  // DTS via tsc (tsup's rollup-plugin-dts is incompatible with TypeScript 7)
+  dts: false,
   sourcemap: true,
   clean: true,
   target: 'node18',

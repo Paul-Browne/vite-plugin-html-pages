@@ -1,0 +1,11 @@
+export declare const PLUGIN_NAME = "vite-plugin-html-pages";
+export declare const VIRTUAL_BUILD_ENTRY_ID = "\0vite-plugin-html-pages:build-entry";
+export declare const VIRTUAL_PAGE_HELPER_ID = "vite-plugin-html-pages/page";
+export declare const RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX = "\0vite-plugin-html-pages/page:";
+export declare const CACHE_DIR_NAME = "node_modules/.cache/vite-plugin-html-pages";
+export declare const DEFAULT_PAGE_EXTENSIONS: string[];
+export declare const VIRTUAL_JSX_RUNTIME_ID = "vite-plugin-html-pages/jsx-runtime";
+export declare const VIRTUAL_JSX_DEV_RUNTIME_ID = "vite-plugin-html-pages/jsx-dev-runtime";
+export declare const RESOLVED_VIRTUAL_JSX_RUNTIME_ID = "\0vite-plugin-html-pages/jsx-runtime";
+export declare const RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID = "\0vite-plugin-html-pages/jsx-dev-runtime";
+export declare const VIRTUAL_LOCAL_TYPES_PREFIX = "\0vite-plugin-html-pages:local-types:";
