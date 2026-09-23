@@ -1,5 +1,5 @@
 import { type ViteDevServer } from 'vite';
-import type { HtPageInfo, HtPageModule } from './types';
+import type { HtPageInfo, HtPageModule } from './types.js';
 export type PageModuleLoader = (entryPath: string, relativePath: string) => Promise<HtPageModule>;
 export interface PageModuleLoaderHandle {
     loadModule: PageModuleLoader;

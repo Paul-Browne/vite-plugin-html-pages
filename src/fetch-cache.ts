@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { CACHE_DIR_NAME } from './constants';
+import { CACHE_DIR_NAME } from './constants.js';
 
 export type FetchCacheMode = 'auto' | 'memory' | 'fs' | 'none';
 export interface FetchWithCacheOptions {

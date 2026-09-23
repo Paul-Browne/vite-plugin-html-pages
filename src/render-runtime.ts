@@ -1,13 +1,13 @@
-import { invalidHtmlReturn, pageError, missingDefaultExport } from './errors';
-import { brand } from './brand';
-import { validateStaticJsxTree } from './react-static-validation';
+import { invalidHtmlReturn, pageError, missingDefaultExport } from './errors.js';
+import { brand } from './brand.js';
+import { validateStaticJsxTree } from './react-static-validation.js';
 import type {
   HtPageInfo,
   HtPageModule,
   HtPageRenderContext,
   HtPageRenderResult,
   HtStructuredPageModule,
-} from './types';
+} from './types.js';
 
 export function isStructuredPageModule(value: unknown): value is HtStructuredPageModule {
   return (

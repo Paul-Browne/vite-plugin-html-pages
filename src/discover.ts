@@ -1,10 +1,10 @@
 import path from 'node:path';
-import { normalizeFsPath, toPosix } from './path-utils';
-import { isDynamicPage, toRoutePattern } from './route-utils';
-import { extractRouteParamDefinitions } from './route-params';
-import type { HtPageInfo, HtPagesPluginOptions } from './types';
-import { DEFAULT_PAGE_EXTENSIONS } from './constants';
-import { brand } from './brand';
+import { normalizeFsPath, toPosix } from './path-utils.js';
+import { isDynamicPage, toRoutePattern } from './route-utils.js';
+import { extractRouteParamDefinitions } from './route-params.js';
+import type { HtPageInfo, HtPagesPluginOptions } from './types.js';
+import { DEFAULT_PAGE_EXTENSIONS } from './constants.js';
+import { brand } from './brand.js';
 
 function buildDefaultIncludeGlobs(
   pagesDir: string,

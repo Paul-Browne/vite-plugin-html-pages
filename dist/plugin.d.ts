@@ -1,5 +1,5 @@
 import type { Plugin } from 'vite';
-import type { HtPagesPluginOptions } from './types';
+import type { HtPagesPluginOptions } from './types.js';
 /**
  * Fallback 404 page, used when the project has no `src/404.ht.js`.
  *

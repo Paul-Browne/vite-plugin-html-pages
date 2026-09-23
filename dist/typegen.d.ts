@@ -1,4 +1,4 @@
-import type { HtPageInfo } from './types';
+import type { HtPageInfo } from './types.js';
 export declare function getGeneratedTypesRoot(root: string, generatedTypesDir?: string): string;
 export declare function getGeneratedHelperPath(args: {
     root: string;

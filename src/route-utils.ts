@@ -1,10 +1,10 @@
-import { normalizeRoutePath, stripPageSuffix, toPosix } from './path-utils';
+import { normalizeRoutePath, stripPageSuffix, toPosix } from './path-utils.js';
 import type {
   HtPageInfo,
   HtPageParams,
   StaticParamRecord,
   StaticParamValue,
-} from './types';
+} from './types.js';
 
 const DYNAMIC_SEGMENT_RE = /\[([A-Za-z0-9_]+)\]/g;
 const CATCH_ALL_SEGMENT_RE = /\[\.\.\.([A-Za-z0-9_]+)\]/g;

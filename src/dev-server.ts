@@ -3,16 +3,16 @@ import path from 'node:path';
 import type { ViteDevServer } from 'vite';
 import { fileURLToPath } from 'node:url';
 
-import { renderPage } from './render-runtime';
-import { matchDynamicPage } from './route-utils';
-import type { HtPageInfo, HtPagesPluginOptions } from './types';
-import { brand } from './brand';
-import { createPageModuleLoader } from './module-loader';
+import { renderPage } from './render-runtime.js';
+import { matchDynamicPage } from './route-utils.js';
+import type { HtPageInfo, HtPagesPluginOptions } from './types.js';
+import { brand } from './brand.js';
+import { createPageModuleLoader } from './module-loader.js';
 import {
   buildDevToolbarInfo,
   injectDevToolbar,
   resolveDevToolbarEnabled,
-} from './dev-toolbar';
+} from './dev-toolbar.js';
 
 const PLUGIN_VERSION = JSON.parse(
   fs.readFileSync(

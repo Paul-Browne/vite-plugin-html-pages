@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import type { HtPageInfo } from './types';
-import { paramsTypeFromDefinitions } from './page-helper-generator';
-import { normalizeFsPath, toPosix } from './path-utils';
+import type { HtPageInfo } from './types.js';
+import { paramsTypeFromDefinitions } from './page-helper-generator.js';
+import { normalizeFsPath, toPosix } from './path-utils.js';
 
 function pageHelperModuleSource(page: HtPageInfo): string {
   const paramsType = paramsTypeFromDefinitions(page.paramDefinitions ?? []);

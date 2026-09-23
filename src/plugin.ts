@@ -6,8 +6,8 @@ import { transform as esbuildTransform } from 'esbuild';
 import pLimit from 'p-limit';
 import type { Plugin, ViteDevServer } from 'vite';
 
-import { writePageTypeDeclarations } from './typegen';
-import { formatDevPageError } from './format-dev-error';
+import { writePageTypeDeclarations } from './typegen.js';
+import { formatDevPageError } from './format-dev-error.js';
 
 import {
   DEFAULT_PAGE_EXTENSIONS,
@@ -20,28 +20,28 @@ import {
   RESOLVED_VIRTUAL_JSX_RUNTIME_ID,
   RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID,
   VIRTUAL_LOCAL_TYPES_PREFIX,
-} from './constants';
-import { discoverEntryPages } from './discover';
-import { installDevServer } from './dev-server';
+} from './constants.js';
+import { discoverEntryPages } from './discover.js';
+import { installDevServer } from './dev-server.js';
 import {
   collectLocalAssetUrls,
   validateHtmlAssetReferences,
-} from './html-asset-validator';
+} from './html-asset-validator.js';
 import {
   createPageModuleLoader,
   isLocalPageTypesImport,
-} from './module-loader';
-import { buildPageIndex } from './page-index';
-import { generateTypedPageHelper } from './page-helper-generator';
-import { renderPage } from './render-runtime';
+} from './module-loader.js';
+import { buildPageIndex } from './page-index.js';
+import { generateTypedPageHelper } from './page-helper-generator.js';
+import { renderPage } from './render-runtime.js';
 import {
   buildProcessedStaticAssets,
   collectStaticAssets,
   copyStaticAssetSource,
   type StaticAssetFile,
-} from './static-assets';
-import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types';
-import { brand, getDisplayName, setDisplayName } from './brand';
+} from './static-assets.js';
+import type { HtPageInfo, HtPageModule, HtPagesPluginOptions } from './types.js';
+import { brand, getDisplayName, setDisplayName } from './brand.js';
 
 let hasWarnedESM = false;
 

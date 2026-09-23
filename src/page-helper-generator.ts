@@ -1,4 +1,4 @@
-import type { HtPageInfo, RouteParamDefinition } from './types';
+import type { HtPageInfo, RouteParamDefinition } from './types.js';
 
 export function paramsTypeFromDefinitions(
   paramDefinitions: RouteParamDefinition[],

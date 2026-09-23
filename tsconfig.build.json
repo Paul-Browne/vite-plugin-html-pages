@@ -2,6 +2,11 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rootDir": "src",
+    // What consumers resolve the declarations under. Bundler resolution
+    // lets extensionless relative imports through, and they then fail to
+    // resolve for every ESM consumer on NodeNext.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "emitDeclarationOnly": true,
     "declaration": true
   },

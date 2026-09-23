@@ -2,9 +2,9 @@ import {
   compareRoutePriority,
   expandStaticPaths,
   fileNameFromRoute,
-} from './route-utils';
-import type { HtPageInfo, HtPageModule } from './types';
-import { brand } from './brand';
+} from './route-utils.js';
+import type { HtPageInfo, HtPageModule } from './types.js';
+import { brand } from './brand.js';
 
 export async function buildPageIndex(args: {
   entries: HtPageInfo[];

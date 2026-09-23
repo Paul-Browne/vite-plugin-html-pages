@@ -1,4 +1,4 @@
-import type { HtPageInfo, HtPagesPluginOptions } from './types';
+import type { HtPageInfo, HtPagesPluginOptions } from './types.js';
 export interface DevToolbarPageInfo {
     displayName: string;
     routePath: string;

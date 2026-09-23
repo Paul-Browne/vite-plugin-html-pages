@@ -1,5 +1,5 @@
-import type { HtPageInfo } from './types';
-import { brand } from './brand';
+import type { HtPageInfo } from './types.js';
+import { brand } from './brand.js';
 
 export function invalidHtmlReturn(page: HtPageInfo, value: unknown): Error {
   const type =

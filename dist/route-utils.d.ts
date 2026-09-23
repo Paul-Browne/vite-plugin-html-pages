@@ -1,4 +1,4 @@
-import type { HtPageInfo, HtPageParams, StaticParamRecord } from './types';
+import type { HtPageInfo, HtPageParams, StaticParamRecord } from './types.js';
 export declare function getParamNames(relativeFromPagesDir: string): string[];
 export declare function isDynamicPage(relativeFromPagesDir: string): boolean;
 export declare function toRoutePattern(relativeFromPagesDir: string, extensions: string[]): string;

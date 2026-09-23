@@ -14,11 +14,11 @@ import {
   VIRTUAL_PAGE_HELPER_ID,
   RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX,
   VIRTUAL_LOCAL_TYPES_PREFIX,
-} from './constants';
-import { brand } from './brand';
-import { generateTypedPageHelper } from './page-helper-generator';
-import { isStructuredPageModule } from './render-runtime';
-import type { HtPageInfo, HtPageModule } from './types';
+} from './constants.js';
+import { brand } from './brand.js';
+import { generateTypedPageHelper } from './page-helper-generator.js';
+import { isStructuredPageModule } from './render-runtime.js';
+import type { HtPageInfo, HtPageModule } from './types.js';
 
 export type PageModuleLoader = (
   entryPath: string,

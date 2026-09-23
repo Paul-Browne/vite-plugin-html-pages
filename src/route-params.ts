@@ -1,4 +1,4 @@
-import type { RouteParamDefinition } from './types';
+import type { RouteParamDefinition } from './types.js';
 
 export function parseRouteParamSegment(
   segment: string,

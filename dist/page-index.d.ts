@@ -1,4 +1,4 @@
-import type { HtPageInfo, HtPageModule } from './types';
+import type { HtPageInfo, HtPageModule } from './types.js';
 export declare function buildPageIndex(args: {
     entries: HtPageInfo[];
     modulesByEntry: Map<string, HtPageModule>;

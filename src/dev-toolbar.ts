@@ -1,5 +1,5 @@
-import { getDisplayName } from './brand';
-import type { HtPageInfo, HtPagesPluginOptions } from './types';
+import { getDisplayName } from './brand.js';
+import type { HtPageInfo, HtPagesPluginOptions } from './types.js';
 
 export interface DevToolbarPageInfo {
   displayName: string;

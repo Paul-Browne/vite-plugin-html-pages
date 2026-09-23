@@ -3,7 +3,7 @@ import path from 'node:path';
 import fg from 'fast-glob';
 import * as esbuild from 'esbuild';
 import fsSync from 'node:fs';
-import { brand } from './brand';
+import { brand } from './brand.js';
 
 export interface StaticAssetFile {
   absolutePath: string;

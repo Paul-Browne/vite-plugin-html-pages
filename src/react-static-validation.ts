@@ -1,4 +1,4 @@
-import { brand } from './brand';
+import { brand } from './brand.js';
 
 type WarnContext = {
   page: {
