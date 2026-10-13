@@ -283,6 +283,54 @@ describe('validateHtmlAssetReferences', () => {
     expect(message).toContain('Missing JavaScript asset: /main.js?v=2');
     expect(message).toContain('Did you mean "/main.ts?v=2"?');
   });
+
+  it('points a compiled output name back at a JSX source', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'island.tsx'), 'export {}');
+
+    const message = validationError(() =>
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: '<script type="module" src="/island.js"></script>',
+        pluginName: 'test',
+      }),
+    );
+
+    expect(message).toContain('Did you mean "/island.tsx"?');
+  });
+
+  it('rejects a CommonJS script, which the build never emits', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'legacy.cjs'), 'module.exports = {}');
+
+    const message = validationError(() =>
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: '<script src="/legacy.cjs"></script>',
+        pluginName: 'test',
+      }),
+    );
+
+    expect(message).toContain('Missing JavaScript asset: /legacy.cjs');
+    expect(message).toContain("src/legacy.cjs is CommonJS, which browsers can't load");
+  });
+
+  it('accepts a CommonJS script shipped from public/', () => {
+    const root = makeFixtureRoot();
+    fs.mkdirSync(path.join(root, 'public'));
+    fs.writeFileSync(path.join(root, 'public', 'vendor.cjs'), '');
+
+    expect(() =>
+      validateHtmlAssetReferences({
+        root,
+        pagesDir: 'src',
+        html: '<script src="/vendor.cjs"></script>',
+        pluginName: 'test',
+      }),
+    ).not.toThrow();
+  });
 })
 
 describe('collectLocalAssetUrls', () => {
@@ -378,6 +426,8 @@ describe('rewriteCompiledAssetUrls', () => {
     ['/main.ts', '/main.js'],
     ['/blog/widget.ts', '/blog/widget.js'],
     ['/lib/util.mjs', '/lib/util.js'],
+    ['/lib/math.mts', '/lib/math.js'],
+    ['/island.tsx', '/island.js'],
   ]);
 
   it('points script tags, preloads and dynamic imports at the output', () => {
@@ -385,6 +435,8 @@ describe('rewriteCompiledAssetUrls', () => {
       <link rel="modulepreload" href="/main.ts">
       <script type="module" src="/main.ts?v=3"></script>
       <script type='module' src='/lib/util.mjs'></script>
+      <script type="module" src="/lib/math.mts"></script>
+      <script type="module" src="/island.tsx"></script>
       <script type="module">import('/main.ts').then((m) => m.init());</script>
     `;
 
@@ -392,6 +444,8 @@ describe('rewriteCompiledAssetUrls', () => {
       <link rel="modulepreload" href="/main.js">
       <script type="module" src="/main.js?v=3"></script>
       <script type='module' src='/lib/util.js'></script>
+      <script type="module" src="/lib/math.js"></script>
+      <script type="module" src="/island.js"></script>
       <script type="module">import('/main.js').then((m) => m.init());</script>
     `);
   });

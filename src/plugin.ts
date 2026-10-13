@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { transform as esbuildTransform } from 'esbuild';
 import pLimit from 'p-limit';
-import type { Plugin, ViteDevServer } from 'vite';
+import type { Plugin, ResolvedConfig, ViteDevServer } from 'vite';
 
 import { writePageTypeDeclarations } from './typegen.js';
 import { formatDevPageError } from './format-dev-error.js';
@@ -179,6 +179,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   let userConfigFile: string | undefined;
   let resolvedMode = 'production';
   let resolvedBase = '/';
+  let viteConfig: ResolvedConfig | undefined;
   let buildPipelinePromise: Promise<BuildPipeline> | null = null;
 
   const cleanUrls = options.cleanUrls ?? true;
@@ -436,6 +437,7 @@ export {
       userConfigFile = resolved.configFile ?? undefined;
       resolvedMode = resolved.mode;
       resolvedBase = resolved.base || '/';
+      viteConfig = resolved;
 
       if (!hasWarnedESM) {
         warnIfNotESM(root);
@@ -688,6 +690,7 @@ export {
           assets: processableAssets,
           minify: true,
           sourcemap: false,
+          viteConfig,
         });
 
         for (const [fileName, source] of processedOutputs) {

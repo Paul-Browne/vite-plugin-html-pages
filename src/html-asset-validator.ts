@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { COMPILED_TO_JS_EXTENSIONS } from './static-assets.js';
+import {
+  COMMONJS_EXTENSIONS,
+  COMPILED_TO_JS_EXTENSIONS,
+} from './static-assets.js';
 
 export interface HtmlAssetValidationOptions {
   root: string;
@@ -115,6 +118,22 @@ function fileExistsForPublicPath(root: string, pagesDir: string, urlPath: string
   if (fs.existsSync(fromPublic)) return true;
 
   return false;
+}
+
+/**
+ * A CommonJS source under `pagesDir` that the page expects to ship. The
+ * build never emits one, so unless `public/` has a copy, the page would
+ * point at nothing.
+ */
+function isUnshippedCommonJs(root: string, pagesDir: string, urlPath: string): boolean {
+  if (!COMMONJS_EXTENSIONS.includes(path.posix.extname(urlPath))) return false;
+
+  const clean = urlPath.slice(1);
+
+  return (
+    fs.existsSync(path.join(root, pagesDir, clean)) &&
+    !fs.existsSync(path.join(root, 'public', clean))
+  );
 }
 
 function collectScriptSrcs(html: string): string[] {
@@ -339,6 +358,24 @@ function missingAssetMessage(args: {
   return lines.join('\n');
 }
 
+function commonJsMessage(args: {
+  pluginName: string;
+  kind: string;
+  url: string;
+  resolved: string;
+  pagesDir: string;
+  pageLabel?: string;
+}): string {
+  const { pluginName, kind, url, resolved, pagesDir, pageLabel } = args;
+  const source = path.posix.join(pagesDir, resolved.slice(1));
+
+  return [
+    `[${pluginName}] Missing ${kind}${formatPageLabel(pageLabel)}: ${url}`,
+    `${source} is CommonJS, which browsers can't load, so the build never emits it.`,
+    `Write it as an ES module (.js, .mjs, .ts, .mts), or put a file meant to ship as is in public/.`,
+  ].join('\n');
+}
+
 function reportMissing(mode: 'error' | 'warn', message: string) {
   if (mode === 'warn') {
     console.warn(`⚠️ ${message}`);
@@ -378,6 +415,14 @@ export function validateHtmlAssetReferences(
       const resolved = resolveLocalPath(url, base);
 
       if (resolved === null || matchesExternalAsset(resolved, external)) continue;
+
+      if (isUnshippedCommonJs(root, pagesDir, resolved)) {
+        messages.push(
+          commonJsMessage({ pluginName, kind, url, resolved, pagesDir, pageLabel }),
+        );
+        continue;
+      }
+
       if (fileExistsForPublicPath(root, pagesDir, resolved)) continue;
 
       messages.push(

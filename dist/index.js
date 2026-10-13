@@ -1245,7 +1245,7 @@ var PLUGIN_VERSION = JSON.parse(
   )
 ).version;
 function isStaticAssetRequest(url) {
-  return url.endsWith(".css") || url.endsWith(".js") || url.endsWith(".mjs") || url.endsWith(".ts") || url.endsWith(".png") || url.endsWith(".jpg") || url.endsWith(".jpeg") || url.endsWith(".gif") || url.endsWith(".svg") || url.endsWith(".webp") || url.endsWith(".ico") || url.endsWith(".woff") || url.endsWith(".woff2") || url.endsWith(".ttf") || url.endsWith(".otf");
+  return url.endsWith(".css") || url.endsWith(".js") || url.endsWith(".mjs") || url.endsWith(".jsx") || url.endsWith(".ts") || url.endsWith(".mts") || url.endsWith(".tsx") || url.endsWith(".png") || url.endsWith(".jpg") || url.endsWith(".jpeg") || url.endsWith(".gif") || url.endsWith(".svg") || url.endsWith(".webp") || url.endsWith(".ico") || url.endsWith(".woff") || url.endsWith(".woff2") || url.endsWith(".ttf") || url.endsWith(".otf");
 }
 function normalizeRoutePath2(input) {
   let value = input.split("?")[0].split("#")[0];
@@ -1368,6 +1368,7 @@ import path7 from "path";
 import fg from "fast-glob";
 import * as esbuild from "esbuild";
 import fsSync from "fs";
+import { transformWithOxc } from "vite";
 function normalizeSlashes(value) {
   return value.replace(/\\/g, "/");
 }
@@ -1377,15 +1378,46 @@ function hasAnySuffix(value, suffixes) {
 function shouldIgnoreFile(rel) {
   return rel.endsWith(".d.ts") || rel.endsWith(".map") || rel.endsWith(".tsbuildinfo") || rel.startsWith(".") || rel.includes("/.");
 }
+var COMPILED_TO_JS_EXTENSIONS = [".ts", ".mts", ".tsx", ".jsx", ".mjs"];
+var COMMONJS_EXTENSIONS = [".cjs", ".cts"];
 function isProcessableAsset(rel) {
-  return rel.endsWith(".js") || rel.endsWith(".mjs") || rel.endsWith(".ts") || rel.endsWith(".css");
+  const ext = path7.posix.extname(rel);
+  return ext === ".js" || ext === ".css" || COMPILED_TO_JS_EXTENSIONS.includes(ext);
 }
-var COMPILED_TO_JS_EXTENSIONS = [".ts", ".mjs"];
 function toOutputFileName(relativePathFromSrc) {
-  const ext = COMPILED_TO_JS_EXTENSIONS.find(
-    (candidate) => relativePathFromSrc.endsWith(candidate)
-  );
-  return ext ? relativePathFromSrc.slice(0, -ext.length) + ".js" : relativePathFromSrc;
+  const ext = path7.posix.extname(relativePathFromSrc);
+  return COMPILED_TO_JS_EXTENSIONS.includes(ext) ? relativePathFromSrc.slice(0, -ext.length) + ".js" : relativePathFromSrc;
+}
+function viteJsxPlugin(config) {
+  if (config.oxc === false) return null;
+  const {
+    jsxInject,
+    include,
+    exclude,
+    jsxRefreshInclude,
+    jsxRefreshExclude,
+    ...options
+  } = config.oxc;
+  const jsx = typeof options.jsx === "object" ? { ...options.jsx, development: false, refresh: false } : options.jsx;
+  return {
+    name: "html-pages-vite-jsx",
+    setup(build2) {
+      build2.onLoad({ filter: /\.[jt]sx$/ }, async (loadArgs) => {
+        const code = await fs4.readFile(loadArgs.path, "utf8");
+        const result = await transformWithOxc(
+          code,
+          loadArgs.path,
+          { ...options, jsx, sourcemap: false },
+          void 0,
+          config
+        );
+        return {
+          contents: jsxInject ? `${jsxInject};${result.code}` : result.code,
+          loader: "js"
+        };
+      });
+    }
+  };
 }
 async function collectStaticAssets(args) {
   const { root, pagesDir, pageExtensions } = args;
@@ -1401,6 +1433,7 @@ async function collectStaticAssets(args) {
     const rel = normalizeSlashes(entry);
     if (shouldIgnoreFile(rel)) continue;
     if (hasAnySuffix(rel, pageExtensions)) continue;
+    if (COMMONJS_EXTENSIONS.includes(path7.posix.extname(rel))) continue;
     const absolutePath = path7.join(srcDir, rel);
     assets.push({
       absolutePath,
@@ -1415,7 +1448,14 @@ async function copyStaticAssetSource(asset) {
   return fs4.readFile(asset.absolutePath);
 }
 async function buildProcessedStaticAssets(args) {
-  const { root, pagesDir, assets, minify = true, sourcemap = false } = args;
+  const {
+    root,
+    pagesDir,
+    assets,
+    minify = true,
+    sourcemap = false,
+    viteConfig
+  } = args;
   const processable = assets.filter((a) => a.kind === "process");
   const out = /* @__PURE__ */ new Map();
   if (processable.length === 0) {
@@ -1424,6 +1464,7 @@ async function buildProcessedStaticAssets(args) {
   const srcDir = path7.join(root, pagesDir);
   const distDir = path7.join(root, "dist");
   const warnedMissingAssets = /* @__PURE__ */ new Set();
+  const jsxPlugin = viteConfig ? viteJsxPlugin(viteConfig) : null;
   const result = await esbuild.build({
     entryPoints: processable.map((a) => a.absolutePath),
     absWorkingDir: root,
@@ -1454,6 +1495,7 @@ async function buildProcessedStaticAssets(args) {
       ".otf": "file"
     },
     plugins: [
+      ...jsxPlugin ? [jsxPlugin] : [],
       {
         name: "html-pages-root-url-resolver",
         setup(build2) {
@@ -1562,6 +1604,11 @@ function fileExistsForPublicPath(root, pagesDir, urlPath) {
   const fromPublic = path8.join(root, "public", clean);
   if (fs5.existsSync(fromPublic)) return true;
   return false;
+}
+function isUnshippedCommonJs(root, pagesDir, urlPath) {
+  if (!COMMONJS_EXTENSIONS.includes(path8.posix.extname(urlPath))) return false;
+  const clean = urlPath.slice(1);
+  return fs5.existsSync(path8.join(root, pagesDir, clean)) && !fs5.existsSync(path8.join(root, "public", clean));
 }
 function collectScriptSrcs(html) {
   const out = [];
@@ -1686,6 +1733,15 @@ function missingAssetMessage(args) {
   if (alternative) lines.push(alternative);
   return lines.join("\n");
 }
+function commonJsMessage(args) {
+  const { pluginName, kind, url, resolved, pagesDir, pageLabel } = args;
+  const source = path8.posix.join(pagesDir, resolved.slice(1));
+  return [
+    `[${pluginName}] Missing ${kind}${formatPageLabel(pageLabel)}: ${url}`,
+    `${source} is CommonJS, which browsers can't load, so the build never emits it.`,
+    `Write it as an ES module (.js, .mjs, .ts, .mts), or put a file meant to ship as is in public/.`
+  ].join("\n");
+}
 function reportMissing(mode, message) {
   if (mode === "warn") {
     console.warn(`\u26A0\uFE0F ${message}`);
@@ -1711,6 +1767,12 @@ function validateHtmlAssetReferences(options) {
     for (const url of unique(urls)) {
       const resolved = resolveLocalPath(url, base);
       if (resolved === null || matchesExternalAsset(resolved, external)) continue;
+      if (isUnshippedCommonJs(root, pagesDir, resolved)) {
+        messages.push(
+          commonJsMessage({ pluginName, kind, url, resolved, pagesDir, pageLabel })
+        );
+        continue;
+      }
       if (fileExistsForPublicPath(root, pagesDir, resolved)) continue;
       messages.push(
         missingAssetMessage({
@@ -1893,6 +1955,7 @@ function htPages(options = {}) {
   let userConfigFile;
   let resolvedMode = "production";
   let resolvedBase = "/";
+  let viteConfig;
   let buildPipelinePromise = null;
   const cleanUrls = options.cleanUrls ?? true;
   const pagesDir = options.pagesDir ?? "src";
@@ -2092,6 +2155,7 @@ export {
       userConfigFile = resolved.configFile ?? void 0;
       resolvedMode = resolved.mode;
       resolvedBase = resolved.base || "/";
+      viteConfig = resolved;
       if (!hasWarnedESM) {
         warnIfNotESM(root);
         hasWarnedESM = true;
@@ -2270,7 +2334,8 @@ export {
           pagesDir,
           assets: processableAssets,
           minify: true,
-          sourcemap: false
+          sourcemap: false,
+          viteConfig
         });
         for (const [fileName, source] of processedOutputs) {
           this.emitFile({
