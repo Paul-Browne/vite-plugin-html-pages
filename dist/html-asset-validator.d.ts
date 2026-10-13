@@ -12,14 +12,22 @@ export interface HtmlAssetValidationOptions {
     pageFileName?: string;
     missingAssets?: 'error' | 'warn';
     externalAssets?: string | string[];
+    /**
+     * Vite's `base`. The site is served from there, so a URL under it is
+     * one of the site's own files, laid out from the root of `pagesDir`
+     * and `public/`; the base comes off before the file is looked for or
+     * matched against `externalAssets`. Defaults to `/`.
+     */
+    base?: string;
 }
 /**
  * Collects the path of every same-site URL the HTML references (any
  * href/src attribute plus literal dynamic imports), with query/hash
- * stripped. Relative URLs are resolved against `pageFileName`. Used to
- * decide which source assets must be emitted at build time.
+ * stripped. Relative URLs are resolved against `pageFileName`, and
+ * Vite's `base` comes off. Used to decide which source assets must be
+ * emitted at build time.
  */
-export declare function collectLocalAssetUrls(html: string, pageFileName?: string): string[];
+export declare function collectLocalAssetUrls(html: string, pageFileName?: string, base?: string): string[];
 /**
  * Points references to compiled sources at what the build emitted for
  * them, so `src="/main.ts"` becomes `src="/main.js"`. `outputPaths` maps
@@ -30,5 +38,5 @@ export declare function collectLocalAssetUrls(html: string, pageFileName?: strin
  * Only the extension changes, so a relative URL stays relative and a
  * query or hash is kept.
  */
-export declare function rewriteCompiledAssetUrls(html: string, pageFileName: string, outputPaths: Map<string, string>): string;
+export declare function rewriteCompiledAssetUrls(html: string, pageFileName: string, outputPaths: Map<string, string>, base?: string): string;
 export declare function validateHtmlAssetReferences(options: HtmlAssetValidationOptions): void;

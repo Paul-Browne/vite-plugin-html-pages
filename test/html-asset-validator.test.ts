@@ -333,6 +333,196 @@ describe('validateHtmlAssetReferences', () => {
   });
 })
 
+describe('validateHtmlAssetReferences under a base', () => {
+  const base = '/repo/';
+
+  function validate(
+    html: string,
+    extra: {
+      root?: string;
+      externalAssets?: string | string[];
+      base?: string;
+      pageFileName?: string;
+    } = {},
+  ) {
+    const root = extra.root ?? makeFixtureRoot();
+
+    validateHtmlAssetReferences({
+      root,
+      pagesDir: 'src',
+      html,
+      pluginName: 'test',
+      pageFileName: extra.pageFileName,
+      missingAssets: 'error',
+      externalAssets: extra.externalAssets,
+      base: extra.base ?? base,
+    });
+  }
+
+  it('takes the base off before looking for the file', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'site.css'), 'body{}');
+    fs.mkdirSync(path.join(root, 'public'));
+    fs.writeFileSync(path.join(root, 'public', 'app.js'), '');
+
+    expect(() =>
+      validate(
+        `<link rel="stylesheet" href="/repo/site.css">
+         <script src="/repo/app.js?v=1"></script>`,
+        { root },
+      ),
+    ).not.toThrow();
+  });
+
+  it('reports a missing asset by the URL the page has, and the paths it looked at', () => {
+    const root = makeFixtureRoot();
+    let message = '';
+
+    try {
+      validate('<link rel="stylesheet" href="/repo/missing.css">', { root });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+
+    expect(message).toContain('Missing stylesheet asset: /repo/missing.css');
+    expect(message).toContain(path.join(root, 'src', 'missing.css'));
+    expect(message).toContain(path.join(root, 'public', 'missing.css'));
+    expect(message).not.toContain(path.join('src', 'repo'));
+  });
+
+  it('points out a base written in by hand, which ends up there twice', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'site.css'), 'body{}');
+
+    expect(() =>
+      validate('<link rel="stylesheet" href="/repo/repo/site.css">', { root }),
+    ).toThrow(/base \(\/repo\/\) twice[\s\S]*Write "\/site\.css"/);
+  });
+
+  it('still checks a URL that does not carry the base', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'site.css'), 'body{}');
+
+    // Not rebased (say, written into an event handler), so it is read
+    // as root-relative: present, and so accepted...
+    expect(() =>
+      validate('<link rel="stylesheet" href="/site.css">', { root }),
+    ).not.toThrow();
+
+    // ...or missing, and reported.
+    expect(() =>
+      validate('<script src="/gone.js"></script>', { root }),
+    ).toThrow(/gone\.js/);
+  });
+
+  it('matches externalAssets, written for the root, against the URL less its base', () => {
+    expect(() =>
+      validate(
+        `<script src="/repo/su/boot.js"></script>
+         <link rel="stylesheet" href="/repo/su/theme.css">`,
+        { externalAssets: '/su/' },
+      ),
+    ).not.toThrow();
+  });
+
+  it('matches an exact externalAssets entry under a base', () => {
+    expect(() =>
+      validate('<script src="/repo/su.js"></script>', { externalAssets: '/su.js' }),
+    ).not.toThrow();
+
+    expect(() =>
+      validate('<script src="/repo/su.js.map.js"></script>', { externalAssets: '/su.js' }),
+    ).toThrow(/su\.js\.map\.js/);
+  });
+
+  it('silences the dynamic import warning for externalAssets under a base', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      validate(
+        `<button onclick="import('/repo/su/alert.js').then(m=>m.dismiss(this))"></button>`,
+        { externalAssets: ['/su/'] },
+      );
+
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not let an externalAssets entry match the base itself', () => {
+    // `/repo/` as written would cover everything under the base once the
+    // base is off — it has to be read as a root path.
+    expect(() =>
+      validate('<script src="/repo/missing.js"></script>', { externalAssets: '/repo/' }),
+    ).toThrow(/missing\.js/);
+  });
+
+  it('takes off a full URL base', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'site.css'), 'body{}');
+
+    expect(() =>
+      validate('<link rel="stylesheet" href="https://cdn.example.com/repo/site.css">', {
+        root,
+        base: 'https://cdn.example.com/repo/',
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validate('<link rel="stylesheet" href="https://cdn.example.com/repo/gone.css">', {
+        root,
+        base: 'https://cdn.example.com/repo/',
+      }),
+    ).toThrow(/gone\.css/);
+  });
+
+  it('resolves what a relative base wrote against the page', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'site.css'), 'body{}');
+
+    expect(() =>
+      validate('<link rel="stylesheet" href="../../site.css">', {
+        root,
+        base: './',
+        pageFileName: 'blog/post/index.html',
+      }),
+    ).not.toThrow();
+  });
+
+  it('resolves a relative URL against the page under the base', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'styles.css'), 'body{}');
+    let message = '';
+
+    try {
+      validate('<link rel="stylesheet" href="styles.css">', {
+        root,
+        pageFileName: 'blog/hello/index.html',
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+
+    // Paths are given from the site root, the way the page writes them.
+    expect(message).toContain('Resolves to /blog/hello/styles.css from /blog/hello/index.html');
+    expect(message).toContain('Did you mean "/styles.css"?');
+  });
+
+  it('accepts a relative URL that resolves to a file under the base', () => {
+    const root = makeFixtureRoot();
+    fs.mkdirSync(path.join(root, 'src', 'blog'));
+    fs.writeFileSync(path.join(root, 'src', 'blog', 'blog.css'), 'body{}');
+
+    expect(() =>
+      validate('<link rel="stylesheet" href="../blog.css">', {
+        root,
+        pageFileName: 'blog/hello/index.html',
+      }),
+    ).not.toThrow();
+  });
+});
+
 describe('collectLocalAssetUrls', () => {
   it('collects root-relative href and src urls', () => {
     const html = `
@@ -411,6 +601,22 @@ describe('collectLocalAssetUrls', () => {
     expect(collectLocalAssetUrls(html)).toEqual(['/my script.js']);
   });
 
+  it('takes the base off before collecting', () => {
+    const html = `
+      <link rel="stylesheet" href="/repo/styles.css?v=2">
+      <script src="/repo/main.js"></script>
+      <button onclick="import('/repo/widgets/chart.js')"></button>
+      <a href="/elsewhere">Out</a>
+    `;
+
+    expect(collectLocalAssetUrls(html, 'index.html', '/repo/').sort()).toEqual([
+      '/elsewhere',
+      '/main.js',
+      '/styles.css',
+      '/widgets/chart.js',
+    ]);
+  });
+
   it('deduplicates repeated references', () => {
     const html = `
       <script src="/main.js"></script>
@@ -469,5 +675,27 @@ describe('rewriteCompiledAssetUrls', () => {
 
     // widget.ts resolves to /widget.ts from the root page, not /blog/widget.ts.
     expect(rewriteCompiledAssetUrls(html, 'index.html', outputs)).toBe(html);
+  });
+
+  it('reads the source name through the base the build put on it', () => {
+    const html =
+      `<script type="module" src="/repo/main.ts"></script>` +
+      `<script>import('/repo/blog/widget.ts')</script>` +
+      `<script src="widget.ts"></script>`;
+
+    expect(rewriteCompiledAssetUrls(html, 'blog/index.html', outputs, '/repo/')).toBe(
+      `<script type="module" src="/repo/main.js"></script>` +
+        `<script>import('/repo/blog/widget.js')</script>` +
+        `<script src="widget.js"></script>`,
+    );
+
+    expect(
+      rewriteCompiledAssetUrls(
+        '<script type="module" src="https://cdn.example.com/repo/main.ts"></script>',
+        'index.html',
+        outputs,
+        'https://cdn.example.com/repo/',
+      ),
+    ).toBe('<script type="module" src="https://cdn.example.com/repo/main.js"></script>');
   });
 });

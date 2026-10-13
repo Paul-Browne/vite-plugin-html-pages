@@ -77,7 +77,9 @@ export interface HtPagesPluginOptions {
      * Exempted from the missing-asset check.
      *
      * A trailing slash makes an entry a directory prefix (`'/su/'` covers
-     * `/su/alert.js`); anything else must match the URL exactly.
+     * `/su/alert.js`); anything else must match the URL exactly. Entries
+     * are written for the site root: Vite's `base` comes off a URL before
+     * it is matched.
      */
     externalAssets?: string | string[];
     rss?: {

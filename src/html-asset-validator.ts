@@ -20,10 +20,18 @@ export interface HtmlAssetValidationOptions {
   pageFileName?: string;
   missingAssets?: 'error' | 'warn';
   externalAssets?: string | string[];
+  /**
+   * Vite's `base`. The site is served from there, so a URL under it is
+   * one of the site's own files, laid out from the root of `pagesDir`
+   * and `public/`; the base comes off before the file is looked for or
+   * matched against `externalAssets`. Defaults to `/`.
+   */
+  base?: string;
 }
 
-function isLocalRootUrl(url: string): boolean {
-  return !!url && url.startsWith('/') && !url.startsWith('//');
+/** Neither root-relative nor carrying a scheme: resolved against the page. */
+function isRelativeUrl(url: string): boolean {
+  return !/^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(url);
 }
 
 /** Stands in for the site's own origin, so pages' URLs can be resolved. */
@@ -31,11 +39,26 @@ const SITE_ORIGIN = 'http://html-pages.invalid';
 const SITE_ROOT = new URL(`${SITE_ORIGIN}/`);
 
 /**
- * What relative URLs in `html` resolve against: the page's own location,
- * unless a `<base href>` says otherwise.
+ * Where the site is served from: Vite's `base`, on the stand-in origin
+ * unless it names its own. A relative base moves with the pages, which
+ * are laid out from the output root either way.
  */
-function documentBaseUrl(html: string, pageFileName: string): URL {
-  const page = new URL(pageFileName.replace(/^\/+/, ''), SITE_ROOT);
+function siteRootUrl(base = '/'): URL {
+  if (!base || base.startsWith('.')) return SITE_ROOT;
+
+  try {
+    return new URL(base.endsWith('/') ? base : `${base}/`, SITE_ROOT);
+  } catch {
+    return SITE_ROOT;
+  }
+}
+
+/**
+ * What relative URLs in `html` resolve against: the page's own location
+ * under the site root, unless a `<base href>` says otherwise.
+ */
+function documentBaseUrl(html: string, pageFileName: string, siteRoot: URL): URL {
+  const page = new URL(pageFileName.replace(/^\/+/, ''), siteRoot);
   const base = stripCodeSampleMarkup(html).match(
     /<base\b[^>]*\bhref=["']([^"']+)["']/i,
   );
@@ -50,27 +73,36 @@ function documentBaseUrl(html: string, pageFileName: string): URL {
 }
 
 /**
- * Resolves `url` the way the browser would and returns its decoded path,
- * or `null` when it leaves the site (another origin, `data:`, `mailto:`)
- * or only points back at the page itself (`#top`, `?q=1`).
+ * Resolves `url` the way the browser would and returns its decoded path
+ * from the site root, or `null` when it leaves the site (another origin,
+ * `data:`, `mailto:`) or only points back at the page itself (`#top`,
+ * `?q=1`).
+ *
+ * Under the base, the base comes off: `/repo/site.css` is `/site.css`.
+ * A path elsewhere on the origin — one the page wrote without the base,
+ * or marked `vite-ignore` — is read as written.
  */
-function resolveLocalPath(url: string, base: URL): string | null {
+function resolveLocalPath(url: string, documentBase: URL, siteRoot: URL): string | null {
   if (url.startsWith('#') || url.startsWith('?')) return null;
 
   let resolved: URL;
 
   try {
-    resolved = new URL(url, base);
+    resolved = new URL(url, documentBase);
   } catch {
     return null;
   }
 
-  if (resolved.origin !== SITE_ORIGIN) return null;
+  if (resolved.origin !== siteRoot.origin) return null;
+
+  const pathname = resolved.pathname.startsWith(siteRoot.pathname)
+    ? resolved.pathname.slice(siteRoot.pathname.length - 1)
+    : resolved.pathname;
 
   try {
-    return decodeURIComponent(resolved.pathname);
+    return decodeURIComponent(pathname);
   } catch {
-    return resolved.pathname;
+    return pathname;
   }
 }
 
@@ -216,14 +248,17 @@ function collectHrefSrcUrls(html: string): string[] {
 /**
  * Collects the path of every same-site URL the HTML references (any
  * href/src attribute plus literal dynamic imports), with query/hash
- * stripped. Relative URLs are resolved against `pageFileName`. Used to
- * decide which source assets must be emitted at build time.
+ * stripped. Relative URLs are resolved against `pageFileName`, and
+ * Vite's `base` comes off. Used to decide which source assets must be
+ * emitted at build time.
  */
 export function collectLocalAssetUrls(
   html: string,
   pageFileName = 'index.html',
+  base = '/',
 ): string[] {
-  const base = documentBaseUrl(html, pageFileName);
+  const siteRoot = siteRootUrl(base);
+  const documentBase = documentBaseUrl(html, pageFileName, siteRoot);
   const candidates = [
     ...collectHrefSrcUrls(html),
     ...collectLiteralDynamicImports(html),
@@ -231,7 +266,7 @@ export function collectLocalAssetUrls(
 
   return unique(
     candidates
-      .map((url) => resolveLocalPath(url, base))
+      .map((url) => resolveLocalPath(url, documentBase, siteRoot))
       .filter((urlPath): urlPath is string => urlPath !== null),
   );
 }
@@ -250,13 +285,15 @@ export function rewriteCompiledAssetUrls(
   html: string,
   pageFileName: string,
   outputPaths: Map<string, string>,
+  base = '/',
 ): string {
   if (outputPaths.size === 0) return html;
 
-  const base = documentBaseUrl(html, pageFileName);
+  const siteRoot = siteRootUrl(base);
+  const documentBase = documentBaseUrl(html, pageFileName, siteRoot);
 
   const rewrite = (url: string): string => {
-    const source = resolveLocalPath(url, base);
+    const source = resolveLocalPath(url, documentBase, siteRoot);
     const output = source && outputPaths.get(source);
 
     if (!source || !output) return url;
@@ -288,19 +325,34 @@ function formatPageLabel(pageLabel?: string): string {
 }
 
 /**
- * A likelier URL, when the one given is a near miss: a relative URL that
- * only works from the site root, or the `.js` a source compiles to.
+ * A likelier URL, when the one given is a near miss: Vite's base written
+ * in by hand on top of the one the build adds, a relative URL that only
+ * works from the site root, or the `.js` a source compiles to.
  */
 function suggestAlternative(args: {
   url: string;
   resolved: string;
+  siteRoot: URL;
   root: string;
   pagesDir: string;
 }): string | null {
-  const { url, resolved, root, pagesDir } = args;
+  const { url, resolved, siteRoot, root, pagesDir } = args;
+  const basePath = siteRoot.pathname;
 
-  if (!isLocalRootUrl(url)) {
-    const fromRoot = resolveLocalPath(url, SITE_ROOT);
+  if (basePath !== '/' && resolved.startsWith(basePath)) {
+    const once = resolved.slice(basePath.length - 1);
+
+    if (fileExistsForPublicPath(root, pagesDir, once)) {
+      return (
+        `It has Vite's base (${basePath}) twice: page HTML is written for ` +
+        `the site root, and the base is added to asset URLs for you, in dev ` +
+        `and build alike. Write "${once}".`
+      );
+    }
+  }
+
+  if (isRelativeUrl(url)) {
+    const fromRoot = resolveLocalPath(url, SITE_ROOT, SITE_ROOT);
 
     if (fromRoot && fileExistsForPublicPath(root, pagesDir, fromRoot)) {
       return (
@@ -332,17 +384,19 @@ function missingAssetMessage(args: {
   kind: string;
   url: string;
   resolved: string;
-  base: URL;
+  /** The page's location, from the site root. */
+  from: string;
+  siteRoot: URL;
   root: string;
   pagesDir: string;
   pageLabel?: string;
 }): string {
-  const { pluginName, kind, url, resolved, base, root, pagesDir, pageLabel } = args;
+  const { pluginName, kind, url, resolved, from, siteRoot, root, pagesDir, pageLabel } = args;
   const clean = resolved.slice(1);
   const lines = [`[${pluginName}] Missing ${kind}${formatPageLabel(pageLabel)}: ${url}`];
 
-  if (!isLocalRootUrl(url)) {
-    lines.push(`Resolves to ${resolved} from ${base.pathname}`);
+  if (isRelativeUrl(url)) {
+    lines.push(`Resolves to ${resolved} from ${from}`);
   }
 
   lines.push(
@@ -351,7 +405,7 @@ function missingAssetMessage(args: {
     `- ${path.join(root, 'public', clean)}`,
   );
 
-  const alternative = suggestAlternative({ url, resolved, root, pagesDir });
+  const alternative = suggestAlternative({ url, resolved, siteRoot, root, pagesDir });
 
   if (alternative) lines.push(alternative);
 
@@ -397,6 +451,7 @@ export function validateHtmlAssetReferences(
     pageFileName = 'index.html',
     missingAssets = 'error',
     externalAssets,
+    base = '/',
   } = options;
 
   /*
@@ -404,15 +459,20 @@ export function validateHtmlAssetReferences(
    * `public/` to find, so checking for one only ever produces a false
    * report. Applied to all three kinds: whatever serves the URL serves
    * it whether a page reached it by `src`, `href`, or `import()`.
+   *
+   * Both lookups are laid out for the site root, so they get the path
+   * with the base already off.
    */
   const external = normalizeExternalAssets(externalAssets);
-  const base = documentBaseUrl(html, pageFileName);
+  const siteRoot = siteRootUrl(base);
+  const documentBase = documentBaseUrl(html, pageFileName, siteRoot);
+  const from = resolveLocalPath(documentBase.href, documentBase, siteRoot) ?? '/';
 
   const findMissing = (urls: string[], kind: string): string[] => {
     const messages: string[] = [];
 
     for (const url of unique(urls)) {
-      const resolved = resolveLocalPath(url, base);
+      const resolved = resolveLocalPath(url, documentBase, siteRoot);
 
       if (resolved === null || matchesExternalAsset(resolved, external)) continue;
 
@@ -431,7 +491,8 @@ export function validateHtmlAssetReferences(
           kind,
           url,
           resolved,
-          base,
+          from,
+          siteRoot,
           root,
           pagesDir,
           pageLabel,

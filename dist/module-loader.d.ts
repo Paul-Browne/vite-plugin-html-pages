@@ -13,4 +13,6 @@ export declare function createPageModuleLoader(args: {
     getPages?: () => Promise<HtPageInfo[]>;
     configFile?: string;
     configMode?: string;
+    /** The build's resolved `base`, which a `--base` flag never puts in the config file. */
+    base?: string;
 }): Promise<PageModuleLoaderHandle>;

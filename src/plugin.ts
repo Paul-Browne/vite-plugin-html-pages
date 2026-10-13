@@ -21,6 +21,7 @@ import {
   RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID,
   VIRTUAL_LOCAL_TYPES_PREFIX,
 } from './constants.js';
+import { applyBaseToHtml, pageBase } from './base-url.js';
 import { discoverEntryPages } from './discover.js';
 import { installDevServer } from './dev-server.js';
 import {
@@ -257,6 +258,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       getPages: async () => entries,
       configFile: userConfigFile,
       configMode: resolvedMode,
+      base: resolvedBase,
     });
 
     try {
@@ -578,6 +580,19 @@ export {
           fileName: string;
           html: string;
         }> = [];
+        let notFoundSource: string | undefined;
+
+        /*
+         * Pages are written for the site root; the base goes on here,
+         * where the dev server's transformIndexHtml would put it. Each
+         * file gets its own, since a relative base differs by depth.
+         */
+        const withBase = (source: string, fileName: string) =>
+          applyBaseToHtml(
+            source,
+            pageBase(resolvedBase, fileName),
+            viteConfig?.html?.additionalAssetSources,
+          );
 
         for (const batch of chunkArray(pages, batchSize)) {
           await Promise.all(
@@ -591,9 +606,11 @@ export {
                   );
                 }
 
-                const html = await renderPage(page, mod, false);
+                const source = await renderPage(page, mod, false);
                 const fileName = options.mapOutputPath?.(page) ?? page.fileName;
+                const html = withBase(source, fileName);
 
+                // What ships is what gets checked, base and all.
                 validateHtmlAssetReferences({
                   root,
                   pagesDir,
@@ -603,7 +620,10 @@ export {
                   pageFileName: fileName,
                   missingAssets: options.missingAssets ?? 'error',
                   externalAssets: options.externalAssets,
+                  base: resolvedBase,
                 });
+
+                if (page.routePath === '/404') notFoundSource = source;
 
                 renderedPages.push({ page, fileName, html });
               }),
@@ -611,15 +631,14 @@ export {
           );
         }
 
-        const rendered404 = renderedPages.find(
-          (rendered) => rendered.page.routePath === '/404',
-        );
         const notFoundHtml =
-          rendered404?.html ?? defaultNotFoundHtml(resolvedBase);
+          notFoundSource != null
+            ? withBase(notFoundSource, '404.html')
+            : defaultNotFoundHtml(resolvedBase);
 
         logDebug(
           options.debug,
-          rendered404
+          notFoundSource != null
             ? 'generated 404.html from user page'
             : 'generated default 404.html',
         );
@@ -631,12 +650,12 @@ export {
         const referencedUrls = new Set<string>();
 
         for (const { fileName, html } of renderedPages) {
-          for (const url of collectLocalAssetUrls(html, fileName)) {
+          for (const url of collectLocalAssetUrls(html, fileName, resolvedBase)) {
             referencedUrls.add(url);
           }
         }
 
-        for (const url of collectLocalAssetUrls(notFoundHtml, '404.html')) {
+        for (const url of collectLocalAssetUrls(notFoundHtml, '404.html', resolvedBase)) {
           referencedUrls.add(url);
         }
 
@@ -729,7 +748,12 @@ export {
           this.emitFile({
             type: 'asset',
             fileName,
-            source: rewriteCompiledAssetUrls(html, fileName, compiledOutputPaths),
+            source: rewriteCompiledAssetUrls(
+              html,
+              fileName,
+              compiledOutputPaths,
+              resolvedBase,
+            ),
           });
         }
 
@@ -740,6 +764,7 @@ export {
             notFoundHtml,
             '404.html',
             compiledOutputPaths,
+            resolvedBase,
           ),
         });
 

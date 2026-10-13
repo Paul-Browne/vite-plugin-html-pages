@@ -417,6 +417,39 @@ built to `blog/hello/index.html`, `href="styles.css"` means
 `/blog/hello/styles.css` — not `src/styles.css`. Use root-relative URLs
 for anything shared between pages.
 
+### Serving from a sub-path (`base`)
+
+Deploying to `https://user.github.io/repo/`? Set Vite's `base` (or pass
+`vite build --base /repo/`) and keep writing pages for the site root.
+The plugin follows Vite's own convention, in dev and build alike:
+
+- **Asset URLs get the base for you.** A root-relative URL in an asset
+  attribute — `<link href>`, `<script src>`, `<img src/srcset>`,
+  `<video src/poster>`, `<source>`, `<use href>`, image `<meta>` tags,
+  plus any `html.additionalAssetSources` — and a literal `import('/…')`
+  in an inline `<script>` become `/repo/…`. Writing `/repo/site.css`
+  yourself puts the base on twice, and the build says so.
+- **Anything else is left as written.** Vite never touches `<a href>`,
+  `<form action>`, or event handler attributes like `onclick`, so put
+  the base there yourself — `import.meta.env.BASE_URL` is `/repo/` in a
+  page module, in dev and build alike:
+
+  ```js
+  export default () => `<a href="${import.meta.env.BASE_URL}about">About</a>`
+  ```
+
+- **`vite-ignore` opts an element out**, as in Vite: its URLs are left
+  exactly as written, and the marker itself is dropped.
+- **The dev server serves the site under the base** — open
+  `http://localhost:5173/repo/`, as Vite prints. `/` redirects there,
+  and other URLs outside the base get Vite's "did you mean" page,
+  matching the 404 a deployed site would give.
+
+Relative URLs need no base: they resolve against the page, which is
+already under it. A relative base (`./`) is written as the path from
+each page back to the site root, so `blog/post/index.html` links
+`../../site.css`.
+
 ### Missing-asset validation
 
 Every generated page is checked: a `<script src="/x.js">` or stylesheet
@@ -449,7 +482,8 @@ htmlPages({ externalAssets: ['/su/'] })
 A trailing slash makes an entry a directory prefix — `'/su/'` covers
 `/su/alert.js` — and anything else has to match the URL exactly, so
 `'/su'` will not quietly swallow `/super.js`. Query strings and hashes
-are ignored when matching.
+are ignored when matching. Write entries for the site root: under a
+`base` of `/repo/`, `'/su/'` covers `/repo/su/alert.js`.
 
 ---
 

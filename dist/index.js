@@ -426,6 +426,160 @@ var RESOLVED_VIRTUAL_JSX_RUNTIME_ID = `\0${VIRTUAL_JSX_RUNTIME_ID}`;
 var RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID = `\0${VIRTUAL_JSX_DEV_RUNTIME_ID}`;
 var VIRTUAL_LOCAL_TYPES_PREFIX = `\0${PLUGIN_NAME}:local-types:`;
 
+// src/base-url.ts
+var ALLOWED_META_NAME = [
+  "msapplication-tileimage",
+  "msapplication-square70x70logo",
+  "msapplication-square150x150logo",
+  "msapplication-wide310x150logo",
+  "msapplication-square310x310logo",
+  "msapplication-config",
+  "twitter:image"
+];
+var ALLOWED_META_PROPERTY = [
+  "og:image",
+  "og:image:url",
+  "og:image:secure_url",
+  "og:audio",
+  "og:audio:secure_url",
+  "og:video",
+  "og:video:secure_url"
+];
+var DEFAULT_HTML_ASSET_SOURCES = {
+  audio: { srcAttributes: ["src"] },
+  embed: { srcAttributes: ["src"] },
+  img: { srcAttributes: ["src"], srcsetAttributes: ["srcset"] },
+  image: { srcAttributes: ["href", "xlink:href"] },
+  input: { srcAttributes: ["src"] },
+  link: { srcAttributes: ["href"], srcsetAttributes: ["imagesrcset"] },
+  object: { srcAttributes: ["data"] },
+  script: { srcAttributes: ["src"] },
+  source: { srcAttributes: ["src"], srcsetAttributes: ["srcset"] },
+  track: { srcAttributes: ["src"] },
+  use: { srcAttributes: ["href", "xlink:href"] },
+  video: { srcAttributes: ["src", "poster"] },
+  meta: {
+    srcAttributes: ["content"],
+    filter({ attributes }) {
+      const name = attributes.name?.trim().toLowerCase();
+      const property = attributes.property?.trim().toLowerCase();
+      return !!name && ALLOWED_META_NAME.includes(name) || !!property && ALLOWED_META_PROPERTY.includes(property);
+    }
+  }
+};
+var ATTRS = `(?:[^>"']|"[^"]*"|'[^']*')*`;
+var MARKUP_RE = new RegExp(
+  `<!--[\\s\\S]*?(?:-->|$)|<(script|style|textarea|title|xmp|iframe|noembed|noframes)(?=[\\s/>])(${ATTRS})>([\\s\\S]*?)(<\\/\\1\\s*>|$)|<([a-zA-Z][^\\s/>]*)(${ATTRS})>`,
+  "gi"
+);
+var ATTR_RE = /(\s*)([^\s"'<>/=]+)(?:(\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+var INLINE_IMPORT_RE = /((?<!(?<!\.\.)\.)\bimport\s*\(\s*)(["'])([^"'`]*)\2(?=\s*\))/g;
+function isRootRelative(url) {
+  return url[0] === "/" && url[1] !== "/";
+}
+function isRelativeBase(base) {
+  return base === "" || base.startsWith(".");
+}
+function pageBase(base, fileName) {
+  if (isRelativeBase(base)) {
+    const depth = fileName.replace(/\\/g, "/").replace(/^\/+/, "").split("/").length - 1;
+    return depth === 0 ? "./" : "../".repeat(depth);
+  }
+  return base.endsWith("/") ? base : `${base}/`;
+}
+function joinBase(url, base) {
+  return isRootRelative(url) ? base + url.slice(1) : url;
+}
+function joinBaseToSrcset(srcset, base) {
+  let out = "";
+  let i = 0;
+  while (i < srcset.length) {
+    const gap = /^[\s,]*/.exec(srcset.slice(i))[0];
+    out += gap;
+    i += gap.length;
+    if (i >= srcset.length) break;
+    const token = /^\S+/.exec(srcset.slice(i))[0];
+    const url = token.replace(/,+$/, "");
+    out += joinBase(url, base) + token.slice(url.length);
+    i += token.length;
+    if (url !== token) continue;
+    let depth = 0;
+    const start = i;
+    for (; i < srcset.length; i++) {
+      const char = srcset[i];
+      if (char === "(") depth++;
+      else if (char === ")") depth = Math.max(0, depth - 1);
+      else if (char === "," && depth === 0) break;
+    }
+    out += srcset.slice(start, i);
+  }
+  return out;
+}
+function parseAttributes(attrs) {
+  const out = {};
+  for (const match of attrs.matchAll(ATTR_RE)) {
+    const key = match[2].toLowerCase();
+    if (!(key in out)) out[key] = match[4] ?? match[5] ?? match[6] ?? "";
+  }
+  return out;
+}
+function rewriteAttributes(tagName, attrs, base, additionalAssetSources) {
+  const name = tagName.toLowerCase();
+  const sources = [
+    DEFAULT_HTML_ASSET_SOURCES[name],
+    additionalAssetSources?.[name]
+  ].filter((source) => !!source);
+  if (sources.length === 0) return attrs;
+  const attributes = parseAttributes(attrs);
+  if ("vite-ignore" in attributes) {
+    return attrs.replace(
+      ATTR_RE,
+      (whole, _lead, key) => key.toLowerCase() === "vite-ignore" ? "" : whole
+    );
+  }
+  const srcKeys = /* @__PURE__ */ new Set();
+  const srcsetKeys = /* @__PURE__ */ new Set();
+  for (const source of sources) {
+    const wanted = (key) => {
+      const value = attributes[key];
+      return !!value && (!source.filter || source.filter({ key, value, attributes }));
+    };
+    source.srcAttributes?.filter(wanted).forEach((key) => srcKeys.add(key));
+    source.srcsetAttributes?.filter(wanted).forEach((key) => srcsetKeys.add(key));
+  }
+  if (srcKeys.size === 0 && srcsetKeys.size === 0) return attrs;
+  return attrs.replace(
+    ATTR_RE,
+    (whole, lead, key, equals, doubleQuoted, singleQuoted, unquoted) => {
+      const value = doubleQuoted ?? singleQuoted ?? unquoted;
+      const lowerKey = key.toLowerCase();
+      if (value === void 0) return whole;
+      const rewritten = srcKeys.has(lowerKey) ? joinBase(value, base) : srcsetKeys.has(lowerKey) ? joinBaseToSrcset(value, base) : value;
+      if (rewritten === value) return whole;
+      const quote = doubleQuoted !== void 0 ? '"' : singleQuoted !== void 0 ? "'" : "";
+      return `${lead}${key}${equals}${quote}${rewritten}${quote}`;
+    }
+  );
+}
+function applyBaseToHtml(html, base, additionalAssetSources) {
+  if (base === "/") return html;
+  return html.replace(
+    MARKUP_RE,
+    (whole, textTag, textAttrs, text, textClose, tag, attrs) => {
+      if (tag) {
+        return `<${tag}${rewriteAttributes(tag, attrs, base, additionalAssetSources)}>`;
+      }
+      if (!textTag) return whole;
+      const isInlineScript = textTag.toLowerCase() === "script" && !("src" in parseAttributes(textAttrs));
+      const content = isInlineScript ? text.replace(
+        INLINE_IMPORT_RE,
+        (_, open, quote, url) => `${open}${quote}${joinBase(url, base)}${quote}`
+      ) : text;
+      return `<${textTag}${rewriteAttributes(textTag, textAttrs, base, additionalAssetSources)}>${content}${textClose}`;
+    }
+  );
+}
+
 // src/discover.ts
 import path4 from "path";
 
@@ -986,6 +1140,9 @@ async function createPageModuleLoader(args) {
   const config = {
     ...userConfig,
     root,
+    // So import.meta.env.BASE_URL in a page module is what the dev
+    // server gives it.
+    base: args.base ?? userConfig.base,
     mode: configMode,
     configFile: false,
     logLevel: "error",
@@ -1256,6 +1413,12 @@ function normalizeRoutePath2(input) {
   }
   return value;
 }
+function stripDevBase(url, base, middlewareMode) {
+  if (base === "/" || url.startsWith(base)) {
+    return { url: `/${url.slice(base.length)}`, base };
+  }
+  return middlewareMode ? { url, base: "/" } : null;
+}
 function shouldSkipHtmlRouting(url, pagesDir) {
   return url.startsWith("/@vite") || url.startsWith("/@fs/") || url.startsWith("/node_modules/") || url.startsWith(`/${pagesDir}/`) || url === "/favicon.ico" || isStaticAssetRequest(url);
 }
@@ -1296,13 +1459,19 @@ function installDevServer(args) {
   });
   server.middlewares.use(async (req, res, next) => {
     try {
-      const originalUrl = req.url ?? "/";
+      const request = stripDevBase(
+        req.url ?? "/",
+        server.config.base,
+        !!server.config.server.middlewareMode
+      );
+      if (!request) return next();
+      const originalUrl = request.url;
       const url = normalizeRoutePath2(originalUrl);
       const rewrittenAssetUrl = tryRewriteRootAssetToSrc(root, pagesDir, url);
       if (rewrittenAssetUrl) {
         const suffixIndex = originalUrl.search(/[?#]/);
         const suffix = suffixIndex === -1 ? "" : originalUrl.slice(suffixIndex);
-        req.url = rewrittenAssetUrl + suffix;
+        req.url = request.base + rewrittenAssetUrl.slice(1) + suffix;
         return next();
       }
       if (shouldSkipHtmlRouting(url, pagesDir)) {
@@ -1549,13 +1718,21 @@ async function buildProcessedStaticAssets(args) {
 }
 
 // src/html-asset-validator.ts
-function isLocalRootUrl(url) {
-  return !!url && url.startsWith("/") && !url.startsWith("//");
+function isRelativeUrl(url) {
+  return !/^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(url);
 }
 var SITE_ORIGIN = "http://html-pages.invalid";
 var SITE_ROOT = new URL(`${SITE_ORIGIN}/`);
-function documentBaseUrl(html, pageFileName) {
-  const page = new URL(pageFileName.replace(/^\/+/, ""), SITE_ROOT);
+function siteRootUrl(base = "/") {
+  if (!base || base.startsWith(".")) return SITE_ROOT;
+  try {
+    return new URL(base.endsWith("/") ? base : `${base}/`, SITE_ROOT);
+  } catch {
+    return SITE_ROOT;
+  }
+}
+function documentBaseUrl(html, pageFileName, siteRoot) {
+  const page = new URL(pageFileName.replace(/^\/+/, ""), siteRoot);
   const base = stripCodeSampleMarkup(html).match(
     /<base\b[^>]*\bhref=["']([^"']+)["']/i
   );
@@ -1566,19 +1743,20 @@ function documentBaseUrl(html, pageFileName) {
     return page;
   }
 }
-function resolveLocalPath(url, base) {
+function resolveLocalPath(url, documentBase, siteRoot) {
   if (url.startsWith("#") || url.startsWith("?")) return null;
   let resolved;
   try {
-    resolved = new URL(url, base);
+    resolved = new URL(url, documentBase);
   } catch {
     return null;
   }
-  if (resolved.origin !== SITE_ORIGIN) return null;
+  if (resolved.origin !== siteRoot.origin) return null;
+  const pathname = resolved.pathname.startsWith(siteRoot.pathname) ? resolved.pathname.slice(siteRoot.pathname.length - 1) : resolved.pathname;
   try {
-    return decodeURIComponent(resolved.pathname);
+    return decodeURIComponent(pathname);
   } catch {
-    return resolved.pathname;
+    return pathname;
   }
 }
 function replaceExtension(url, from, to) {
@@ -1662,21 +1840,23 @@ function collectHrefSrcUrls(html) {
   }
   return out;
 }
-function collectLocalAssetUrls(html, pageFileName = "index.html") {
-  const base = documentBaseUrl(html, pageFileName);
+function collectLocalAssetUrls(html, pageFileName = "index.html", base = "/") {
+  const siteRoot = siteRootUrl(base);
+  const documentBase = documentBaseUrl(html, pageFileName, siteRoot);
   const candidates = [
     ...collectHrefSrcUrls(html),
     ...collectLiteralDynamicImports(html)
   ];
   return unique(
-    candidates.map((url) => resolveLocalPath(url, base)).filter((urlPath) => urlPath !== null)
+    candidates.map((url) => resolveLocalPath(url, documentBase, siteRoot)).filter((urlPath) => urlPath !== null)
   );
 }
-function rewriteCompiledAssetUrls(html, pageFileName, outputPaths) {
+function rewriteCompiledAssetUrls(html, pageFileName, outputPaths, base = "/") {
   if (outputPaths.size === 0) return html;
-  const base = documentBaseUrl(html, pageFileName);
+  const siteRoot = siteRootUrl(base);
+  const documentBase = documentBaseUrl(html, pageFileName, siteRoot);
   const rewrite = (url) => {
-    const source = resolveLocalPath(url, base);
+    const source = resolveLocalPath(url, documentBase, siteRoot);
     const output = source && outputPaths.get(source);
     if (!source || !output) return url;
     return replaceExtension(
@@ -1700,9 +1880,16 @@ function formatPageLabel(pageLabel) {
   return pageLabel ? ` (${pageLabel})` : "";
 }
 function suggestAlternative(args) {
-  const { url, resolved, root, pagesDir } = args;
-  if (!isLocalRootUrl(url)) {
-    const fromRoot = resolveLocalPath(url, SITE_ROOT);
+  const { url, resolved, siteRoot, root, pagesDir } = args;
+  const basePath = siteRoot.pathname;
+  if (basePath !== "/" && resolved.startsWith(basePath)) {
+    const once = resolved.slice(basePath.length - 1);
+    if (fileExistsForPublicPath(root, pagesDir, once)) {
+      return `It has Vite's base (${basePath}) twice: page HTML is written for the site root, and the base is added to asset URLs for you, in dev and build alike. Write "${once}".`;
+    }
+  }
+  if (isRelativeUrl(url)) {
+    const fromRoot = resolveLocalPath(url, SITE_ROOT, SITE_ROOT);
     if (fromRoot && fileExistsForPublicPath(root, pagesDir, fromRoot)) {
       return `Did you mean "${fromRoot}"? A relative URL resolves against the page's own location, so it changes from page to page.`;
     }
@@ -1718,18 +1905,18 @@ function suggestAlternative(args) {
   return null;
 }
 function missingAssetMessage(args) {
-  const { pluginName, kind, url, resolved, base, root, pagesDir, pageLabel } = args;
+  const { pluginName, kind, url, resolved, from, siteRoot, root, pagesDir, pageLabel } = args;
   const clean = resolved.slice(1);
   const lines = [`[${pluginName}] Missing ${kind}${formatPageLabel(pageLabel)}: ${url}`];
-  if (!isLocalRootUrl(url)) {
-    lines.push(`Resolves to ${resolved} from ${base.pathname}`);
+  if (isRelativeUrl(url)) {
+    lines.push(`Resolves to ${resolved} from ${from}`);
   }
   lines.push(
     `Expected one of:`,
     `- ${path8.join(root, pagesDir, clean)}`,
     `- ${path8.join(root, "public", clean)}`
   );
-  const alternative = suggestAlternative({ url, resolved, root, pagesDir });
+  const alternative = suggestAlternative({ url, resolved, siteRoot, root, pagesDir });
   if (alternative) lines.push(alternative);
   return lines.join("\n");
 }
@@ -1758,14 +1945,17 @@ function validateHtmlAssetReferences(options) {
     pageLabel,
     pageFileName = "index.html",
     missingAssets = "error",
-    externalAssets
+    externalAssets,
+    base = "/"
   } = options;
   const external = normalizeExternalAssets(externalAssets);
-  const base = documentBaseUrl(html, pageFileName);
+  const siteRoot = siteRootUrl(base);
+  const documentBase = documentBaseUrl(html, pageFileName, siteRoot);
+  const from = resolveLocalPath(documentBase.href, documentBase, siteRoot) ?? "/";
   const findMissing = (urls, kind) => {
     const messages = [];
     for (const url of unique(urls)) {
-      const resolved = resolveLocalPath(url, base);
+      const resolved = resolveLocalPath(url, documentBase, siteRoot);
       if (resolved === null || matchesExternalAsset(resolved, external)) continue;
       if (isUnshippedCommonJs(root, pagesDir, resolved)) {
         messages.push(
@@ -1780,7 +1970,8 @@ function validateHtmlAssetReferences(options) {
           kind,
           url,
           resolved,
-          base,
+          from,
+          siteRoot,
           root,
           pagesDir,
           pageLabel
@@ -2013,7 +2204,8 @@ function htPages(options = {}) {
       root,
       getPages: async () => entries,
       configFile: userConfigFile,
-      configMode: resolvedMode
+      configMode: resolvedMode,
+      base: resolvedBase
     });
     try {
       const modulesByEntry = /* @__PURE__ */ new Map();
@@ -2253,6 +2445,12 @@ export {
         const limit = pLimit(options.renderConcurrency ?? 8);
         const batchSize = options.renderBatchSize ?? Math.max(options.renderConcurrency ?? 8, 32);
         const renderedPages = [];
+        let notFoundSource;
+        const withBase = (source, fileName) => applyBaseToHtml(
+          source,
+          pageBase(resolvedBase, fileName),
+          viteConfig?.html?.additionalAssetSources
+        );
         for (const batch of chunkArray(pages, batchSize)) {
           await Promise.all(
             batch.map(
@@ -2263,8 +2461,9 @@ export {
                     brand(`Missing module for page entry: ${page.entryPath}`)
                   );
                 }
-                const html = await renderPage(page, mod, false);
+                const source = await renderPage(page, mod, false);
                 const fileName = options.mapOutputPath?.(page) ?? page.fileName;
+                const html = withBase(source, fileName);
                 validateHtmlAssetReferences({
                   root,
                   pagesDir,
@@ -2273,28 +2472,27 @@ export {
                   pageLabel: page.relativePath,
                   pageFileName: fileName,
                   missingAssets: options.missingAssets ?? "error",
-                  externalAssets: options.externalAssets
+                  externalAssets: options.externalAssets,
+                  base: resolvedBase
                 });
+                if (page.routePath === "/404") notFoundSource = source;
                 renderedPages.push({ page, fileName, html });
               })
             )
           );
         }
-        const rendered404 = renderedPages.find(
-          (rendered) => rendered.page.routePath === "/404"
-        );
-        const notFoundHtml = rendered404?.html ?? defaultNotFoundHtml(resolvedBase);
+        const notFoundHtml = notFoundSource != null ? withBase(notFoundSource, "404.html") : defaultNotFoundHtml(resolvedBase);
         logDebug(
           options.debug,
-          rendered404 ? "generated 404.html from user page" : "generated default 404.html"
+          notFoundSource != null ? "generated 404.html from user page" : "generated default 404.html"
         );
         const referencedUrls = /* @__PURE__ */ new Set();
         for (const { fileName, html } of renderedPages) {
-          for (const url of collectLocalAssetUrls(html, fileName)) {
+          for (const url of collectLocalAssetUrls(html, fileName, resolvedBase)) {
             referencedUrls.add(url);
           }
         }
-        for (const url of collectLocalAssetUrls(notFoundHtml, "404.html")) {
+        for (const url of collectLocalAssetUrls(notFoundHtml, "404.html", resolvedBase)) {
           referencedUrls.add(url);
         }
         const staticAssets = await collectStaticAssets({
@@ -2366,7 +2564,12 @@ export {
           this.emitFile({
             type: "asset",
             fileName,
-            source: rewriteCompiledAssetUrls(html, fileName, compiledOutputPaths)
+            source: rewriteCompiledAssetUrls(
+              html,
+              fileName,
+              compiledOutputPaths,
+              resolvedBase
+            )
           });
         }
         this.emitFile({
@@ -2375,7 +2578,8 @@ export {
           source: rewriteCompiledAssetUrls(
             notFoundHtml,
             "404.html",
-            compiledOutputPaths
+            compiledOutputPaths,
+            resolvedBase
           )
         });
         const sitemapBase = (options.site ?? "").replace(/\/+$/, "");
