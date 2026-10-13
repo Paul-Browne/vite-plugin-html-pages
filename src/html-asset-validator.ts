@@ -1,22 +1,85 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { COMPILED_TO_JS_EXTENSIONS } from './static-assets.js';
+
 export interface HtmlAssetValidationOptions {
   root: string;
   pagesDir: string;
   html: string;
   pluginName: string;
   pageLabel?: string;
+  /**
+   * Where the page is emitted, relative to the output directory
+   * (`blog/hello/index.html`). Relative URLs resolve against it, as they
+   * do in the browser. Defaults to `index.html`.
+   */
+  pageFileName?: string;
   missingAssets?: 'error' | 'warn';
   externalAssets?: string | string[];
 }
 
-function stripQueryAndHash(url: string): string {
-  return url.split('#')[0].split('?')[0];
-}
-
 function isLocalRootUrl(url: string): boolean {
   return !!url && url.startsWith('/') && !url.startsWith('//');
+}
+
+/** Stands in for the site's own origin, so pages' URLs can be resolved. */
+const SITE_ORIGIN = 'http://html-pages.invalid';
+const SITE_ROOT = new URL(`${SITE_ORIGIN}/`);
+
+/**
+ * What relative URLs in `html` resolve against: the page's own location,
+ * unless a `<base href>` says otherwise.
+ */
+function documentBaseUrl(html: string, pageFileName: string): URL {
+  const page = new URL(pageFileName.replace(/^\/+/, ''), SITE_ROOT);
+  const base = stripCodeSampleMarkup(html).match(
+    /<base\b[^>]*\bhref=["']([^"']+)["']/i,
+  );
+
+  if (!base) return page;
+
+  try {
+    return new URL(base[1], page);
+  } catch {
+    return page;
+  }
+}
+
+/**
+ * Resolves `url` the way the browser would and returns its decoded path,
+ * or `null` when it leaves the site (another origin, `data:`, `mailto:`)
+ * or only points back at the page itself (`#top`, `?q=1`).
+ */
+function resolveLocalPath(url: string, base: URL): string | null {
+  if (url.startsWith('#') || url.startsWith('?')) return null;
+
+  let resolved: URL;
+
+  try {
+    resolved = new URL(url, base);
+  } catch {
+    return null;
+  }
+
+  if (resolved.origin !== SITE_ORIGIN) return null;
+
+  try {
+    return decodeURIComponent(resolved.pathname);
+  } catch {
+    return resolved.pathname;
+  }
+}
+
+/** Swaps the extension of a URL's path, keeping any query or hash. */
+function replaceExtension(url: string, from: string, to: string): string {
+  const suffixIndex = url.search(/[?#]/);
+  const pathPart = suffixIndex === -1 ? url : url.slice(0, suffixIndex);
+  const suffix = suffixIndex === -1 ? '' : url.slice(suffixIndex);
+
+  if (!pathPart.endsWith(from)) return url;
+
+  return pathPart.slice(0, -from.length) + to + suffix;
 }
 
 /**
@@ -26,11 +89,9 @@ function isLocalRootUrl(url: string): boolean {
  * `/su/alert.js`); anything else has to match the URL exactly, so `/su`
  * never quietly swallows `/super.js`.
  */
-function matchesExternalAsset(url: string, patterns: string[]): boolean {
-  const clean = stripQueryAndHash(url);
-
+function matchesExternalAsset(urlPath: string, patterns: string[]): boolean {
   return patterns.some((pattern) =>
-    pattern.endsWith('/') ? clean.startsWith(pattern) : clean === pattern,
+    pattern.endsWith('/') ? urlPath.startsWith(pattern) : urlPath === pattern,
   );
 }
 
@@ -44,8 +105,8 @@ function normalizeExternalAssets(value?: string | string[]): string[] {
     .map((entry) => (entry.startsWith('/') ? entry : `/${entry}`));
 }
 
-function fileExistsForPublicUrl(root: string, pagesDir: string, url: string): boolean {
-  const clean = stripQueryAndHash(url).slice(1);
+function fileExistsForPublicPath(root: string, pagesDir: string, urlPath: string): boolean {
+  const clean = urlPath.slice(1);
 
   const fromSrc = path.join(root, pagesDir, clean);
   if (fs.existsSync(fromSrc)) return true;
@@ -86,11 +147,24 @@ function collectStylesheetHrefs(html: string): string[] {
   return out;
 }
 
+const CODE_SAMPLE_RE = /<(pre|code)\b[^>]*>[\s\S]*?<\/\1>/gi;
+
 /** Drop documentation samples so example `import('/…')` strings aren't treated as assets. */
 function stripCodeSampleMarkup(html: string): string {
-  return html
-    .replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, '')
-    .replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, '');
+  return html.replace(CODE_SAMPLE_RE, '');
+}
+
+/** Applies `map` to everything except `<pre>` and `<code>` samples. */
+function mapOutsideCodeSamples(html: string, map: (chunk: string) => string): string {
+  let out = '';
+  let last = 0;
+
+  for (const match of html.matchAll(CODE_SAMPLE_RE)) {
+    out += map(html.slice(last, match.index)) + match[0];
+    last = match.index + match[0].length;
+  }
+
+  return out + map(html.slice(last));
 }
 
 function collectLiteralDynamicImports(html: string): string[] {
@@ -121,55 +195,152 @@ function collectHrefSrcUrls(html: string): string[] {
 }
 
 /**
- * Collects every root-relative URL the HTML references (any href/src
- * attribute plus literal dynamic imports), with query/hash stripped.
- * Used to decide which source assets must be emitted at build time.
+ * Collects the path of every same-site URL the HTML references (any
+ * href/src attribute plus literal dynamic imports), with query/hash
+ * stripped. Relative URLs are resolved against `pageFileName`. Used to
+ * decide which source assets must be emitted at build time.
  */
-export function collectLocalAssetUrls(html: string): string[] {
+export function collectLocalAssetUrls(
+  html: string,
+  pageFileName = 'index.html',
+): string[] {
+  const base = documentBaseUrl(html, pageFileName);
   const candidates = [
     ...collectHrefSrcUrls(html),
     ...collectLiteralDynamicImports(html),
   ];
 
-  return unique(candidates.filter(isLocalRootUrl).map(stripQueryAndHash));
+  return unique(
+    candidates
+      .map((url) => resolveLocalPath(url, base))
+      .filter((urlPath): urlPath is string => urlPath !== null),
+  );
+}
+
+/**
+ * Points references to compiled sources at what the build emitted for
+ * them, so `src="/main.ts"` becomes `src="/main.js"`. `outputPaths` maps
+ * a source path (`/main.ts`) to its output path (`/main.js`).
+ *
+ * Covers the same references `collectLocalAssetUrls` reads, except in
+ * `<pre>`/`<code>` samples, which should go on showing the source name.
+ * Only the extension changes, so a relative URL stays relative and a
+ * query or hash is kept.
+ */
+export function rewriteCompiledAssetUrls(
+  html: string,
+  pageFileName: string,
+  outputPaths: Map<string, string>,
+): string {
+  if (outputPaths.size === 0) return html;
+
+  const base = documentBaseUrl(html, pageFileName);
+
+  const rewrite = (url: string): string => {
+    const source = resolveLocalPath(url, base);
+    const output = source && outputPaths.get(source);
+
+    if (!source || !output) return url;
+
+    return replaceExtension(
+      url,
+      path.posix.extname(source),
+      path.posix.extname(output),
+    );
+  };
+
+  return mapOutsideCodeSamples(html, (chunk) =>
+    chunk
+      .replace(
+        /\b(href|src)=(["'])([^"']+)\2/gi,
+        (_, attr: string, quote: string, url: string) =>
+          `${attr}=${quote}${rewrite(url)}${quote}`,
+      )
+      .replace(
+        /(import\s*\(\s*["'])([^"'`]+)(["']\s*\))/gi,
+        (_, open: string, url: string, close: string) =>
+          `${open}${rewrite(url)}${close}`,
+      ),
+  );
 }
 
 function formatPageLabel(pageLabel?: string): string {
   return pageLabel ? ` (${pageLabel})` : '';
 }
 
+/**
+ * A likelier URL, when the one given is a near miss: a relative URL that
+ * only works from the site root, or the `.js` a source compiles to.
+ */
+function suggestAlternative(args: {
+  url: string;
+  resolved: string;
+  root: string;
+  pagesDir: string;
+}): string | null {
+  const { url, resolved, root, pagesDir } = args;
+
+  if (!isLocalRootUrl(url)) {
+    const fromRoot = resolveLocalPath(url, SITE_ROOT);
+
+    if (fromRoot && fileExistsForPublicPath(root, pagesDir, fromRoot)) {
+      return (
+        `Did you mean "${fromRoot}"? A relative URL resolves against the ` +
+        `page's own location, so it changes from page to page.`
+      );
+    }
+  }
+
+  if (resolved.endsWith('.js')) {
+    for (const ext of COMPILED_TO_JS_EXTENSIONS) {
+      const source = path.join(pagesDir, resolved.slice(1, -3) + ext);
+
+      if (fs.existsSync(path.join(root, source))) {
+        return (
+          `Did you mean "${replaceExtension(url, '.js', ext)}"? Reference ` +
+          `${source} by its source name: the dev server serves it as is, ` +
+          `and the build points the page at the .js it compiles to.`
+        );
+      }
+    }
+  }
+
+  return null;
+}
+
 function missingAssetMessage(args: {
   pluginName: string;
   kind: string;
   url: string;
+  resolved: string;
+  base: URL;
   root: string;
   pagesDir: string;
   pageLabel?: string;
 }): string {
-  const { pluginName, kind, url, root, pagesDir, pageLabel } = args;
-  const clean = stripQueryAndHash(url).slice(1);
-  const pageSuffix = formatPageLabel(pageLabel);
+  const { pluginName, kind, url, resolved, base, root, pagesDir, pageLabel } = args;
+  const clean = resolved.slice(1);
+  const lines = [`[${pluginName}] Missing ${kind}${formatPageLabel(pageLabel)}: ${url}`];
 
-  return (
-    `[${pluginName}] Missing ${kind}${pageSuffix}: ${url}\n` +
-    `Expected one of:\n` +
-    `- ${path.join(root, pagesDir, clean)}\n` +
-    `- ${path.join(root, 'public', clean)}`
+  if (!isLocalRootUrl(url)) {
+    lines.push(`Resolves to ${resolved} from ${base.pathname}`);
+  }
+
+  lines.push(
+    `Expected one of:`,
+    `- ${path.join(root, pagesDir, clean)}`,
+    `- ${path.join(root, 'public', clean)}`,
   );
+
+  const alternative = suggestAlternative({ url, resolved, root, pagesDir });
+
+  if (alternative) lines.push(alternative);
+
+  return lines.join('\n');
 }
 
-function reportMissing(args: {
-  mode: 'error' | 'warn';
-  pluginName: string;
-  kind: string;
-  url: string;
-  root: string;
-  pagesDir: string;
-  pageLabel?: string;
-}) {
-  const message = missingAssetMessage(args);
-
-  if (args.mode === 'warn') {
+function reportMissing(mode: 'error' | 'warn', message: string) {
+  if (mode === 'warn') {
     console.warn(`⚠️ ${message}`);
     return;
   }
@@ -186,6 +357,7 @@ export function validateHtmlAssetReferences(
     html,
     pluginName,
     pageLabel,
+    pageFileName = 'index.html',
     missingAssets = 'error',
     externalAssets,
   } = options;
@@ -197,55 +369,46 @@ export function validateHtmlAssetReferences(
    * it whether a page reached it by `src`, `href`, or `import()`.
    */
   const external = normalizeExternalAssets(externalAssets);
-  const isCheckable = (url: string) =>
-    isLocalRootUrl(url) && !matchesExternalAsset(url, external);
+  const base = documentBaseUrl(html, pageFileName);
 
-  const scriptSrcs = unique(collectScriptSrcs(html)).filter(isCheckable);
-  const stylesheetHrefs = unique(collectStylesheetHrefs(html)).filter(isCheckable);
-  const literalDynamicImports = unique(collectLiteralDynamicImports(html)).filter(
-    isCheckable,
-  );
+  const findMissing = (urls: string[], kind: string): string[] => {
+    const messages: string[] = [];
 
-  for (const url of scriptSrcs) {
-    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
-      reportMissing({
-        mode: missingAssets,
-        pluginName,
-        kind: 'JavaScript asset',
-        url,
-        root,
-        pagesDir,
-        pageLabel,
-      });
-    }
-  }
+    for (const url of unique(urls)) {
+      const resolved = resolveLocalPath(url, base);
 
-  for (const url of stylesheetHrefs) {
-    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
-      reportMissing({
-        mode: missingAssets,
-        pluginName,
-        kind: 'stylesheet asset',
-        url,
-        root,
-        pagesDir,
-        pageLabel,
-      });
-    }
-  }
+      if (resolved === null || matchesExternalAsset(resolved, external)) continue;
+      if (fileExistsForPublicPath(root, pagesDir, resolved)) continue;
 
-  for (const url of literalDynamicImports) {
-    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
-      console.warn(
-        `⚠️ ${missingAssetMessage({
+      messages.push(
+        missingAssetMessage({
           pluginName,
-          kind: 'literal dynamic import',
+          kind,
           url,
+          resolved,
+          base,
           root,
           pagesDir,
           pageLabel,
-        })}`,
+        }),
       );
     }
+
+    return messages;
+  };
+
+  for (const message of findMissing(collectScriptSrcs(html), 'JavaScript asset')) {
+    reportMissing(missingAssets, message);
+  }
+
+  for (const message of findMissing(collectStylesheetHrefs(html), 'stylesheet asset')) {
+    reportMissing(missingAssets, message);
+  }
+
+  for (const message of findMissing(
+    collectLiteralDynamicImports(html),
+    'literal dynamic import',
+  )) {
+    console.warn(`⚠️ ${message}`);
   }
 }

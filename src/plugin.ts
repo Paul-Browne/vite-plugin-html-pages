@@ -25,6 +25,7 @@ import { discoverEntryPages } from './discover.js';
 import { installDevServer } from './dev-server.js';
 import {
   collectLocalAssetUrls,
+  rewriteCompiledAssetUrls,
   validateHtmlAssetReferences,
 } from './html-asset-validator.js';
 import {
@@ -570,7 +571,11 @@ export {
 
         // Render every page up front so asset emission can be limited to
         // files the generated HTML actually references.
-        const renderedPages: Array<{ page: HtPageInfo; html: string }> = [];
+        const renderedPages: Array<{
+          page: HtPageInfo;
+          fileName: string;
+          html: string;
+        }> = [];
 
         for (const batch of chunkArray(pages, batchSize)) {
           await Promise.all(
@@ -585,6 +590,7 @@ export {
                 }
 
                 const html = await renderPage(page, mod, false);
+                const fileName = options.mapOutputPath?.(page) ?? page.fileName;
 
                 validateHtmlAssetReferences({
                   root,
@@ -592,11 +598,12 @@ export {
                   html,
                   pluginName: PLUGIN_NAME,
                   pageLabel: page.relativePath,
+                  pageFileName: fileName,
                   missingAssets: options.missingAssets ?? 'error',
                   externalAssets: options.externalAssets,
                 });
 
-                renderedPages.push({ page, html });
+                renderedPages.push({ page, fileName, html });
               }),
             ),
           );
@@ -621,13 +628,13 @@ export {
         // always copied since they may be referenced from CSS.
         const referencedUrls = new Set<string>();
 
-        for (const { html } of renderedPages) {
-          for (const url of collectLocalAssetUrls(html)) {
+        for (const { fileName, html } of renderedPages) {
+          for (const url of collectLocalAssetUrls(html, fileName)) {
             referencedUrls.add(url);
           }
         }
 
-        for (const url of collectLocalAssetUrls(notFoundHtml)) {
+        for (const url of collectLocalAssetUrls(notFoundHtml, '404.html')) {
           referencedUrls.add(url);
         }
 
@@ -637,8 +644,9 @@ export {
           pageExtensions,
         });
 
+        // Pages reference sources by their own name (`/main.ts`), the
+        // URL the dev server answers; the output name is not a reference.
         const isReferenced = (asset: StaticAssetFile) =>
-          referencedUrls.has(`/${asset.outputFileName}`) ||
           referencedUrls.has(`/${asset.relativePathFromSrc}`);
 
         const processableAssets: StaticAssetFile[] = [];
@@ -690,6 +698,18 @@ export {
           });
         }
 
+        // `/main.ts` was emitted as main.js, so the pages have to say so.
+        const compiledOutputPaths = new Map<string, string>();
+
+        for (const asset of processableAssets) {
+          if (asset.outputFileName !== asset.relativePathFromSrc) {
+            compiledOutputPaths.set(
+              `/${asset.relativePathFromSrc}`,
+              `/${asset.outputFileName}`,
+            );
+          }
+        }
+
         for (const asset of staticAssets) {
           if (asset.kind !== 'copy') continue;
 
@@ -702,18 +722,22 @@ export {
           });
         }
 
-        for (const { page, html } of renderedPages) {
+        for (const { fileName, html } of renderedPages) {
           this.emitFile({
             type: 'asset',
-            fileName: options.mapOutputPath?.(page) ?? page.fileName,
-            source: html,
+            fileName,
+            source: rewriteCompiledAssetUrls(html, fileName, compiledOutputPaths),
           });
         }
 
         this.emitFile({
           type: 'asset',
           fileName: '404.html',
-          source: notFoundHtml,
+          source: rewriteCompiledAssetUrls(
+            notFoundHtml,
+            '404.html',
+            compiledOutputPaths,
+          ),
         });
 
         const sitemapBase = (options.site ?? '').replace(/\/+$/, '');

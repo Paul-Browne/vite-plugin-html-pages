@@ -9,6 +9,12 @@ export interface CollectStaticAssetsArgs {
     pagesDir: string;
     pageExtensions: string[];
 }
+/**
+ * Script sources esbuild writes out as `.js`. Pages reference them by
+ * their source name, which is what the dev server serves, and the build
+ * rewrites those URLs to the output name.
+ */
+export declare const COMPILED_TO_JS_EXTENSIONS: string[];
 export declare function collectStaticAssets(args: CollectStaticAssetsArgs): Promise<StaticAssetFile[]>;
 export declare function copyStaticAssetSource(asset: StaticAssetFile): Promise<Uint8Array>;
 export declare function buildProcessedStaticAssets(args: {

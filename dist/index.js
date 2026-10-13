@@ -1359,30 +1359,208 @@ function installDevServer(args) {
 }
 
 // src/html-asset-validator.ts
-import fs4 from "fs";
+import fs5 from "fs";
+import path8 from "path";
+
+// src/static-assets.ts
+import fs4 from "fs/promises";
 import path7 from "path";
-function stripQueryAndHash(url) {
-  return url.split("#")[0].split("?")[0];
+import fg from "fast-glob";
+import * as esbuild from "esbuild";
+import fsSync from "fs";
+function normalizeSlashes(value) {
+  return value.replace(/\\/g, "/");
 }
+function hasAnySuffix(value, suffixes) {
+  return suffixes.some((suffix) => value.endsWith(suffix));
+}
+function shouldIgnoreFile(rel) {
+  return rel.endsWith(".d.ts") || rel.endsWith(".map") || rel.endsWith(".tsbuildinfo") || rel.startsWith(".") || rel.includes("/.");
+}
+function isProcessableAsset(rel) {
+  return rel.endsWith(".js") || rel.endsWith(".mjs") || rel.endsWith(".ts") || rel.endsWith(".css");
+}
+var COMPILED_TO_JS_EXTENSIONS = [".ts", ".mjs"];
+function toOutputFileName(relativePathFromSrc) {
+  const ext = COMPILED_TO_JS_EXTENSIONS.find(
+    (candidate) => relativePathFromSrc.endsWith(candidate)
+  );
+  return ext ? relativePathFromSrc.slice(0, -ext.length) + ".js" : relativePathFromSrc;
+}
+async function collectStaticAssets(args) {
+  const { root, pagesDir, pageExtensions } = args;
+  const srcDir = path7.join(root, pagesDir);
+  const entries = await fg("**/*", {
+    cwd: srcDir,
+    onlyFiles: true,
+    dot: false,
+    absolute: false
+  });
+  const assets = [];
+  for (const entry of entries) {
+    const rel = normalizeSlashes(entry);
+    if (shouldIgnoreFile(rel)) continue;
+    if (hasAnySuffix(rel, pageExtensions)) continue;
+    const absolutePath = path7.join(srcDir, rel);
+    assets.push({
+      absolutePath,
+      relativePathFromSrc: rel,
+      outputFileName: normalizeSlashes(toOutputFileName(rel)),
+      kind: isProcessableAsset(rel) ? "process" : "copy"
+    });
+  }
+  return assets;
+}
+async function copyStaticAssetSource(asset) {
+  return fs4.readFile(asset.absolutePath);
+}
+async function buildProcessedStaticAssets(args) {
+  const { root, pagesDir, assets, minify = true, sourcemap = false } = args;
+  const processable = assets.filter((a) => a.kind === "process");
+  const out = /* @__PURE__ */ new Map();
+  if (processable.length === 0) {
+    return out;
+  }
+  const srcDir = path7.join(root, pagesDir);
+  const distDir = path7.join(root, "dist");
+  const warnedMissingAssets = /* @__PURE__ */ new Set();
+  const result = await esbuild.build({
+    entryPoints: processable.map((a) => a.absolutePath),
+    absWorkingDir: root,
+    outbase: srcDir,
+    outdir: distDir,
+    bundle: true,
+    splitting: true,
+    treeShaking: true,
+    minify,
+    sourcemap,
+    format: "esm",
+    target: "esnext",
+    platform: "browser",
+    write: false,
+    entryNames: "[dir]/[name]",
+    assetNames: "[dir]/[name]",
+    loader: {
+      ".css": "css",
+      ".png": "file",
+      ".jpg": "file",
+      ".jpeg": "file",
+      ".gif": "file",
+      ".svg": "file",
+      ".webp": "file",
+      ".woff": "file",
+      ".woff2": "file",
+      ".ttf": "file",
+      ".otf": "file"
+    },
+    plugins: [
+      {
+        name: "html-pages-root-url-resolver",
+        setup(build2) {
+          build2.onResolve({ filter: /^\// }, (resolveArgs) => {
+            if (path7.isAbsolute(resolveArgs.path) && fsSync.existsSync(resolveArgs.path)) {
+              return { path: resolveArgs.path };
+            }
+            const cleanPath = resolveArgs.path.slice(1);
+            const fromSrc = path7.join(srcDir, cleanPath);
+            if (fsSync.existsSync(fromSrc)) {
+              return { path: fromSrc };
+            }
+            const fromPublic = path7.join(root, "public", cleanPath);
+            if (fsSync.existsSync(fromPublic)) {
+              return {
+                path: resolveArgs.path,
+                external: true
+              };
+            }
+            const isCssUrlToken = resolveArgs.kind === "url-token";
+            if (isCssUrlToken) {
+              if (!warnedMissingAssets.has(resolveArgs.path)) {
+                warnedMissingAssets.add(resolveArgs.path);
+                console.warn(
+                  brand(
+                    `\u26A0\uFE0F Missing CSS asset: ${resolveArgs.path}
+  Looked in:
+  - ${fromSrc}
+  - ${fromPublic}`
+                  )
+                );
+              }
+              return {
+                path: resolveArgs.path,
+                external: true
+              };
+            }
+            return {
+              path: fromSrc
+            };
+          });
+        }
+      }
+    ]
+  });
+  for (const file of result.outputFiles) {
+    const rel = normalizeSlashes(path7.relative(distDir, file.path));
+    out.set(rel, file.text ?? file.contents);
+  }
+  return out;
+}
+
+// src/html-asset-validator.ts
 function isLocalRootUrl(url) {
   return !!url && url.startsWith("/") && !url.startsWith("//");
 }
-function matchesExternalAsset(url, patterns) {
-  const clean = stripQueryAndHash(url);
+var SITE_ORIGIN = "http://html-pages.invalid";
+var SITE_ROOT = new URL(`${SITE_ORIGIN}/`);
+function documentBaseUrl(html, pageFileName) {
+  const page = new URL(pageFileName.replace(/^\/+/, ""), SITE_ROOT);
+  const base = stripCodeSampleMarkup(html).match(
+    /<base\b[^>]*\bhref=["']([^"']+)["']/i
+  );
+  if (!base) return page;
+  try {
+    return new URL(base[1], page);
+  } catch {
+    return page;
+  }
+}
+function resolveLocalPath(url, base) {
+  if (url.startsWith("#") || url.startsWith("?")) return null;
+  let resolved;
+  try {
+    resolved = new URL(url, base);
+  } catch {
+    return null;
+  }
+  if (resolved.origin !== SITE_ORIGIN) return null;
+  try {
+    return decodeURIComponent(resolved.pathname);
+  } catch {
+    return resolved.pathname;
+  }
+}
+function replaceExtension(url, from, to) {
+  const suffixIndex = url.search(/[?#]/);
+  const pathPart = suffixIndex === -1 ? url : url.slice(0, suffixIndex);
+  const suffix = suffixIndex === -1 ? "" : url.slice(suffixIndex);
+  if (!pathPart.endsWith(from)) return url;
+  return pathPart.slice(0, -from.length) + to + suffix;
+}
+function matchesExternalAsset(urlPath, patterns) {
   return patterns.some(
-    (pattern) => pattern.endsWith("/") ? clean.startsWith(pattern) : clean === pattern
+    (pattern) => pattern.endsWith("/") ? urlPath.startsWith(pattern) : urlPath === pattern
   );
 }
 function normalizeExternalAssets(value) {
   const list = value == null ? [] : Array.isArray(value) ? value : [value];
   return list.filter(Boolean).map((entry) => entry.startsWith("/") ? entry : `/${entry}`);
 }
-function fileExistsForPublicUrl(root, pagesDir, url) {
-  const clean = stripQueryAndHash(url).slice(1);
-  const fromSrc = path7.join(root, pagesDir, clean);
-  if (fs4.existsSync(fromSrc)) return true;
-  const fromPublic = path7.join(root, "public", clean);
-  if (fs4.existsSync(fromPublic)) return true;
+function fileExistsForPublicPath(root, pagesDir, urlPath) {
+  const clean = urlPath.slice(1);
+  const fromSrc = path8.join(root, pagesDir, clean);
+  if (fs5.existsSync(fromSrc)) return true;
+  const fromPublic = path8.join(root, "public", clean);
+  if (fs5.existsSync(fromPublic)) return true;
   return false;
 }
 function collectScriptSrcs(html) {
@@ -1404,8 +1582,18 @@ function collectStylesheetHrefs(html) {
   }
   return out;
 }
+var CODE_SAMPLE_RE = /<(pre|code)\b[^>]*>[\s\S]*?<\/\1>/gi;
 function stripCodeSampleMarkup(html) {
-  return html.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, "").replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, "");
+  return html.replace(CODE_SAMPLE_RE, "");
+}
+function mapOutsideCodeSamples(html, map) {
+  let out = "";
+  let last = 0;
+  for (const match of html.matchAll(CODE_SAMPLE_RE)) {
+    out += map(html.slice(last, match.index)) + match[0];
+    last = match.index + match[0].length;
+  }
+  return out + map(html.slice(last));
 }
 function collectLiteralDynamicImports(html) {
   const out = [];
@@ -1427,28 +1615,79 @@ function collectHrefSrcUrls(html) {
   }
   return out;
 }
-function collectLocalAssetUrls(html) {
+function collectLocalAssetUrls(html, pageFileName = "index.html") {
+  const base = documentBaseUrl(html, pageFileName);
   const candidates = [
     ...collectHrefSrcUrls(html),
     ...collectLiteralDynamicImports(html)
   ];
-  return unique(candidates.filter(isLocalRootUrl).map(stripQueryAndHash));
+  return unique(
+    candidates.map((url) => resolveLocalPath(url, base)).filter((urlPath) => urlPath !== null)
+  );
+}
+function rewriteCompiledAssetUrls(html, pageFileName, outputPaths) {
+  if (outputPaths.size === 0) return html;
+  const base = documentBaseUrl(html, pageFileName);
+  const rewrite = (url) => {
+    const source = resolveLocalPath(url, base);
+    const output = source && outputPaths.get(source);
+    if (!source || !output) return url;
+    return replaceExtension(
+      url,
+      path8.posix.extname(source),
+      path8.posix.extname(output)
+    );
+  };
+  return mapOutsideCodeSamples(
+    html,
+    (chunk) => chunk.replace(
+      /\b(href|src)=(["'])([^"']+)\2/gi,
+      (_, attr, quote, url) => `${attr}=${quote}${rewrite(url)}${quote}`
+    ).replace(
+      /(import\s*\(\s*["'])([^"'`]+)(["']\s*\))/gi,
+      (_, open, url, close) => `${open}${rewrite(url)}${close}`
+    )
+  );
 }
 function formatPageLabel(pageLabel) {
   return pageLabel ? ` (${pageLabel})` : "";
 }
-function missingAssetMessage(args) {
-  const { pluginName, kind, url, root, pagesDir, pageLabel } = args;
-  const clean = stripQueryAndHash(url).slice(1);
-  const pageSuffix = formatPageLabel(pageLabel);
-  return `[${pluginName}] Missing ${kind}${pageSuffix}: ${url}
-Expected one of:
-- ${path7.join(root, pagesDir, clean)}
-- ${path7.join(root, "public", clean)}`;
+function suggestAlternative(args) {
+  const { url, resolved, root, pagesDir } = args;
+  if (!isLocalRootUrl(url)) {
+    const fromRoot = resolveLocalPath(url, SITE_ROOT);
+    if (fromRoot && fileExistsForPublicPath(root, pagesDir, fromRoot)) {
+      return `Did you mean "${fromRoot}"? A relative URL resolves against the page's own location, so it changes from page to page.`;
+    }
+  }
+  if (resolved.endsWith(".js")) {
+    for (const ext of COMPILED_TO_JS_EXTENSIONS) {
+      const source = path8.join(pagesDir, resolved.slice(1, -3) + ext);
+      if (fs5.existsSync(path8.join(root, source))) {
+        return `Did you mean "${replaceExtension(url, ".js", ext)}"? Reference ${source} by its source name: the dev server serves it as is, and the build points the page at the .js it compiles to.`;
+      }
+    }
+  }
+  return null;
 }
-function reportMissing(args) {
-  const message = missingAssetMessage(args);
-  if (args.mode === "warn") {
+function missingAssetMessage(args) {
+  const { pluginName, kind, url, resolved, base, root, pagesDir, pageLabel } = args;
+  const clean = resolved.slice(1);
+  const lines = [`[${pluginName}] Missing ${kind}${formatPageLabel(pageLabel)}: ${url}`];
+  if (!isLocalRootUrl(url)) {
+    lines.push(`Resolves to ${resolved} from ${base.pathname}`);
+  }
+  lines.push(
+    `Expected one of:`,
+    `- ${path8.join(root, pagesDir, clean)}`,
+    `- ${path8.join(root, "public", clean)}`
+  );
+  const alternative = suggestAlternative({ url, resolved, root, pagesDir });
+  if (alternative) lines.push(alternative);
+  return lines.join("\n");
+}
+function reportMissing(mode, message) {
+  if (mode === "warn") {
     console.warn(`\u26A0\uFE0F ${message}`);
     return;
   }
@@ -1461,55 +1700,44 @@ function validateHtmlAssetReferences(options) {
     html,
     pluginName,
     pageLabel,
+    pageFileName = "index.html",
     missingAssets = "error",
     externalAssets
   } = options;
   const external = normalizeExternalAssets(externalAssets);
-  const isCheckable = (url) => isLocalRootUrl(url) && !matchesExternalAsset(url, external);
-  const scriptSrcs = unique(collectScriptSrcs(html)).filter(isCheckable);
-  const stylesheetHrefs = unique(collectStylesheetHrefs(html)).filter(isCheckable);
-  const literalDynamicImports = unique(collectLiteralDynamicImports(html)).filter(
-    isCheckable
-  );
-  for (const url of scriptSrcs) {
-    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
-      reportMissing({
-        mode: missingAssets,
-        pluginName,
-        kind: "JavaScript asset",
-        url,
-        root,
-        pagesDir,
-        pageLabel
-      });
-    }
-  }
-  for (const url of stylesheetHrefs) {
-    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
-      reportMissing({
-        mode: missingAssets,
-        pluginName,
-        kind: "stylesheet asset",
-        url,
-        root,
-        pagesDir,
-        pageLabel
-      });
-    }
-  }
-  for (const url of literalDynamicImports) {
-    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
-      console.warn(
-        `\u26A0\uFE0F ${missingAssetMessage({
+  const base = documentBaseUrl(html, pageFileName);
+  const findMissing = (urls, kind) => {
+    const messages = [];
+    for (const url of unique(urls)) {
+      const resolved = resolveLocalPath(url, base);
+      if (resolved === null || matchesExternalAsset(resolved, external)) continue;
+      if (fileExistsForPublicPath(root, pagesDir, resolved)) continue;
+      messages.push(
+        missingAssetMessage({
           pluginName,
-          kind: "literal dynamic import",
+          kind,
           url,
+          resolved,
+          base,
           root,
           pagesDir,
           pageLabel
-        })}`
+        })
       );
     }
+    return messages;
+  };
+  for (const message of findMissing(collectScriptSrcs(html), "JavaScript asset")) {
+    reportMissing(missingAssets, message);
+  }
+  for (const message of findMissing(collectStylesheetHrefs(html), "stylesheet asset")) {
+    reportMissing(missingAssets, message);
+  }
+  for (const message of findMissing(
+    collectLiteralDynamicImports(html),
+    "literal dynamic import"
+  )) {
+    console.warn(`\u26A0\uFE0F ${message}`);
   }
 }
 
@@ -1568,149 +1796,6 @@ async function buildPageIndex(args) {
     seenRoutes.set(page.routePath, page);
   }
   return pages;
-}
-
-// src/static-assets.ts
-import fs5 from "fs/promises";
-import path8 from "path";
-import fg from "fast-glob";
-import * as esbuild from "esbuild";
-import fsSync from "fs";
-function normalizeSlashes(value) {
-  return value.replace(/\\/g, "/");
-}
-function hasAnySuffix(value, suffixes) {
-  return suffixes.some((suffix) => value.endsWith(suffix));
-}
-function shouldIgnoreFile(rel) {
-  return rel.endsWith(".d.ts") || rel.endsWith(".map") || rel.endsWith(".tsbuildinfo") || rel.startsWith(".") || rel.includes("/.");
-}
-function isProcessableAsset(rel) {
-  return rel.endsWith(".js") || rel.endsWith(".mjs") || rel.endsWith(".ts") || rel.endsWith(".css");
-}
-function toOutputFileName(relativePathFromSrc) {
-  if (relativePathFromSrc.endsWith(".ts")) {
-    return relativePathFromSrc.slice(0, -3) + ".js";
-  }
-  return relativePathFromSrc;
-}
-async function collectStaticAssets(args) {
-  const { root, pagesDir, pageExtensions } = args;
-  const srcDir = path8.join(root, pagesDir);
-  const entries = await fg("**/*", {
-    cwd: srcDir,
-    onlyFiles: true,
-    dot: false,
-    absolute: false
-  });
-  const assets = [];
-  for (const entry of entries) {
-    const rel = normalizeSlashes(entry);
-    if (shouldIgnoreFile(rel)) continue;
-    if (hasAnySuffix(rel, pageExtensions)) continue;
-    const absolutePath = path8.join(srcDir, rel);
-    assets.push({
-      absolutePath,
-      relativePathFromSrc: rel,
-      outputFileName: normalizeSlashes(toOutputFileName(rel)),
-      kind: isProcessableAsset(rel) ? "process" : "copy"
-    });
-  }
-  return assets;
-}
-async function copyStaticAssetSource(asset) {
-  return fs5.readFile(asset.absolutePath);
-}
-async function buildProcessedStaticAssets(args) {
-  const { root, pagesDir, assets, minify = true, sourcemap = false } = args;
-  const processable = assets.filter((a) => a.kind === "process");
-  const out = /* @__PURE__ */ new Map();
-  if (processable.length === 0) {
-    return out;
-  }
-  const srcDir = path8.join(root, pagesDir);
-  const distDir = path8.join(root, "dist");
-  const warnedMissingAssets = /* @__PURE__ */ new Set();
-  const result = await esbuild.build({
-    entryPoints: processable.map((a) => a.absolutePath),
-    absWorkingDir: root,
-    outbase: srcDir,
-    outdir: distDir,
-    bundle: true,
-    splitting: true,
-    treeShaking: true,
-    minify,
-    sourcemap,
-    format: "esm",
-    target: "esnext",
-    platform: "browser",
-    write: false,
-    entryNames: "[dir]/[name]",
-    assetNames: "[dir]/[name]",
-    loader: {
-      ".css": "css",
-      ".png": "file",
-      ".jpg": "file",
-      ".jpeg": "file",
-      ".gif": "file",
-      ".svg": "file",
-      ".webp": "file",
-      ".woff": "file",
-      ".woff2": "file",
-      ".ttf": "file",
-      ".otf": "file"
-    },
-    plugins: [
-      {
-        name: "html-pages-root-url-resolver",
-        setup(build2) {
-          build2.onResolve({ filter: /^\// }, (resolveArgs) => {
-            if (path8.isAbsolute(resolveArgs.path) && fsSync.existsSync(resolveArgs.path)) {
-              return { path: resolveArgs.path };
-            }
-            const cleanPath = resolveArgs.path.slice(1);
-            const fromSrc = path8.join(srcDir, cleanPath);
-            if (fsSync.existsSync(fromSrc)) {
-              return { path: fromSrc };
-            }
-            const fromPublic = path8.join(root, "public", cleanPath);
-            if (fsSync.existsSync(fromPublic)) {
-              return {
-                path: resolveArgs.path,
-                external: true
-              };
-            }
-            const isCssUrlToken = resolveArgs.kind === "url-token";
-            if (isCssUrlToken) {
-              if (!warnedMissingAssets.has(resolveArgs.path)) {
-                warnedMissingAssets.add(resolveArgs.path);
-                console.warn(
-                  brand(
-                    `\u26A0\uFE0F Missing CSS asset: ${resolveArgs.path}
-  Looked in:
-  - ${fromSrc}
-  - ${fromPublic}`
-                  )
-                );
-              }
-              return {
-                path: resolveArgs.path,
-                external: true
-              };
-            }
-            return {
-              path: fromSrc
-            };
-          });
-        }
-      }
-    ]
-  });
-  for (const file of result.outputFiles) {
-    const rel = normalizeSlashes(path8.relative(distDir, file.path));
-    out.set(rel, file.text ?? file.contents);
-  }
-  return out;
 }
 
 // src/plugin.ts
@@ -2115,16 +2200,18 @@ export {
                   );
                 }
                 const html = await renderPage(page, mod, false);
+                const fileName = options.mapOutputPath?.(page) ?? page.fileName;
                 validateHtmlAssetReferences({
                   root,
                   pagesDir,
                   html,
                   pluginName: PLUGIN_NAME,
                   pageLabel: page.relativePath,
+                  pageFileName: fileName,
                   missingAssets: options.missingAssets ?? "error",
                   externalAssets: options.externalAssets
                 });
-                renderedPages.push({ page, html });
+                renderedPages.push({ page, fileName, html });
               })
             )
           );
@@ -2138,12 +2225,12 @@ export {
           rendered404 ? "generated 404.html from user page" : "generated default 404.html"
         );
         const referencedUrls = /* @__PURE__ */ new Set();
-        for (const { html } of renderedPages) {
-          for (const url of collectLocalAssetUrls(html)) {
+        for (const { fileName, html } of renderedPages) {
+          for (const url of collectLocalAssetUrls(html, fileName)) {
             referencedUrls.add(url);
           }
         }
-        for (const url of collectLocalAssetUrls(notFoundHtml)) {
+        for (const url of collectLocalAssetUrls(notFoundHtml, "404.html")) {
           referencedUrls.add(url);
         }
         const staticAssets = await collectStaticAssets({
@@ -2151,7 +2238,7 @@ export {
           pagesDir,
           pageExtensions
         });
-        const isReferenced = (asset) => referencedUrls.has(`/${asset.outputFileName}`) || referencedUrls.has(`/${asset.relativePathFromSrc}`);
+        const isReferenced = (asset) => referencedUrls.has(`/${asset.relativePathFromSrc}`);
         const processableAssets = [];
         const skippedAssets = [];
         for (const asset of staticAssets) {
@@ -2192,6 +2279,15 @@ export {
             source
           });
         }
+        const compiledOutputPaths = /* @__PURE__ */ new Map();
+        for (const asset of processableAssets) {
+          if (asset.outputFileName !== asset.relativePathFromSrc) {
+            compiledOutputPaths.set(
+              `/${asset.relativePathFromSrc}`,
+              `/${asset.outputFileName}`
+            );
+          }
+        }
         for (const asset of staticAssets) {
           if (asset.kind !== "copy") continue;
           const source = await copyStaticAssetSource(asset);
@@ -2201,17 +2297,21 @@ export {
             source
           });
         }
-        for (const { page, html } of renderedPages) {
+        for (const { fileName, html } of renderedPages) {
           this.emitFile({
             type: "asset",
-            fileName: options.mapOutputPath?.(page) ?? page.fileName,
-            source: html
+            fileName,
+            source: rewriteCompiledAssetUrls(html, fileName, compiledOutputPaths)
           });
         }
         this.emitFile({
           type: "asset",
           fileName: "404.html",
-          source: notFoundHtml
+          source: rewriteCompiledAssetUrls(
+            notFoundHtml,
+            "404.html",
+            compiledOutputPaths
+          )
         });
         const sitemapBase = (options.site ?? "").replace(/\/+$/, "");
         const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(

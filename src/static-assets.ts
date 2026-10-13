@@ -45,11 +45,19 @@ function isProcessableAsset(rel: string): boolean {
   );
 }
 
+/**
+ * Script sources esbuild writes out as `.js`. Pages reference them by
+ * their source name, which is what the dev server serves, and the build
+ * rewrites those URLs to the output name.
+ */
+export const COMPILED_TO_JS_EXTENSIONS = ['.ts', '.mjs'];
+
 function toOutputFileName(relativePathFromSrc: string): string {
-  if (relativePathFromSrc.endsWith('.ts')) {
-    return relativePathFromSrc.slice(0, -3) + '.js';
-  }
-  return relativePathFromSrc;
+  const ext = COMPILED_TO_JS_EXTENSIONS.find((candidate) =>
+    relativePathFromSrc.endsWith(candidate),
+  );
+
+  return ext ? relativePathFromSrc.slice(0, -ext.length) + '.js' : relativePathFromSrc;
 }
 
 export async function collectStaticAssets(
