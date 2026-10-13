@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { transform as esbuildTransform } from 'esbuild';
 import pLimit from 'p-limit';
-import type { Plugin, ViteDevServer } from 'vite';
+import type { HtmlAssetSource, Plugin, ViteDevServer } from 'vite';
 
 import { writePageTypeDeclarations } from './typegen.js';
 import { formatDevPageError } from './format-dev-error.js';
@@ -21,6 +21,7 @@ import {
   RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID,
   VIRTUAL_LOCAL_TYPES_PREFIX,
 } from './constants.js';
+import { applyBaseToHtml, pageBase } from './base-url.js';
 import { discoverEntryPages } from './discover.js';
 import { installDevServer } from './dev-server.js';
 import {
@@ -178,6 +179,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   let userConfigFile: string | undefined;
   let resolvedMode = 'production';
   let resolvedBase = '/';
+  let additionalAssetSources: Record<string, HtmlAssetSource> | undefined;
   let buildPipelinePromise: Promise<BuildPipeline> | null = null;
 
   const cleanUrls = options.cleanUrls ?? true;
@@ -255,6 +257,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
       getPages: async () => entries,
       configFile: userConfigFile,
       configMode: resolvedMode,
+      base: resolvedBase,
     });
 
     try {
@@ -435,6 +438,7 @@ export {
       userConfigFile = resolved.configFile ?? undefined;
       resolvedMode = resolved.mode;
       resolvedBase = resolved.base || '/';
+      additionalAssetSources = resolved.html?.additionalAssetSources;
 
       if (!hasWarnedESM) {
         warnIfNotESM(root);
@@ -570,7 +574,27 @@ export {
 
         // Render every page up front so asset emission can be limited to
         // files the generated HTML actually references.
-        const renderedPages: Array<{ page: HtPageInfo; html: string }> = [];
+        const renderedPages: Array<{
+          page: HtPageInfo;
+          fileName: string;
+          base: string;
+          html: string;
+        }> = [];
+        let notFoundSource: string | undefined;
+
+        /*
+         * Pages are written for the site root; the base goes on here,
+         * where the dev server's transformIndexHtml would put it. Each
+         * file gets its own, since a relative base differs by depth.
+         */
+        const withBase = (source: string, fileName: string) => {
+          const base = pageBase(resolvedBase, fileName);
+
+          return {
+            base,
+            html: applyBaseToHtml(source, base, additionalAssetSources),
+          };
+        };
 
         for (const batch of chunkArray(pages, batchSize)) {
           await Promise.all(
@@ -584,8 +608,11 @@ export {
                   );
                 }
 
-                const html = await renderPage(page, mod, false);
+                const source = await renderPage(page, mod, false);
+                const fileName = options.mapOutputPath?.(page) ?? page.fileName;
+                const { base, html } = withBase(source, fileName);
 
+                // What ships is what gets checked, base and all.
                 validateHtmlAssetReferences({
                   root,
                   pagesDir,
@@ -594,23 +621,29 @@ export {
                   pageLabel: page.relativePath,
                   missingAssets: options.missingAssets ?? 'error',
                   externalAssets: options.externalAssets,
+                  base,
                 });
 
-                renderedPages.push({ page, html });
+                if (page.routePath === '/404') notFoundSource = source;
+
+                renderedPages.push({ page, fileName, base, html });
               }),
             ),
           );
         }
 
-        const rendered404 = renderedPages.find(
-          (rendered) => rendered.page.routePath === '/404',
-        );
-        const notFoundHtml =
-          rendered404?.html ?? defaultNotFoundHtml(resolvedBase);
+        const notFound =
+          notFoundSource != null
+            ? withBase(notFoundSource, '404.html')
+            : {
+                base: pageBase(resolvedBase, '404.html'),
+                html: defaultNotFoundHtml(resolvedBase),
+              };
+        const notFoundHtml = notFound.html;
 
         logDebug(
           options.debug,
-          rendered404
+          notFoundSource != null
             ? 'generated 404.html from user page'
             : 'generated default 404.html',
         );
@@ -621,14 +654,10 @@ export {
         // always copied since they may be referenced from CSS.
         const referencedUrls = new Set<string>();
 
-        for (const { html } of renderedPages) {
-          for (const url of collectLocalAssetUrls(html)) {
+        for (const { html, base } of [...renderedPages, notFound]) {
+          for (const url of collectLocalAssetUrls(html, base)) {
             referencedUrls.add(url);
           }
-        }
-
-        for (const url of collectLocalAssetUrls(notFoundHtml)) {
-          referencedUrls.add(url);
         }
 
         const staticAssets = await collectStaticAssets({
@@ -702,10 +731,10 @@ export {
           });
         }
 
-        for (const { page, html } of renderedPages) {
+        for (const { fileName, html } of renderedPages) {
           this.emitFile({
             type: 'asset',
-            fileName: options.mapOutputPath?.(page) ?? page.fileName,
+            fileName,
             source: html,
           });
         }

@@ -180,6 +180,151 @@ describe('validateHtmlAssetReferences', () => {
   });
 })
 
+describe('validateHtmlAssetReferences under a base', () => {
+  const base = '/repo/';
+
+  function validate(html: string, extra: { root?: string; externalAssets?: string | string[]; base?: string } = {}) {
+    const root = extra.root ?? makeFixtureRoot();
+
+    validateHtmlAssetReferences({
+      root,
+      pagesDir: 'src',
+      html,
+      pluginName: 'test',
+      missingAssets: 'error',
+      externalAssets: extra.externalAssets,
+      base: extra.base ?? base,
+    });
+  }
+
+  it('takes the base off before looking for the file', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'site.css'), 'body{}');
+    fs.mkdirSync(path.join(root, 'public'));
+    fs.writeFileSync(path.join(root, 'public', 'app.js'), '');
+
+    expect(() =>
+      validate(
+        `<link rel="stylesheet" href="/repo/site.css">
+         <script src="/repo/app.js?v=1"></script>`,
+        { root },
+      ),
+    ).not.toThrow();
+  });
+
+  it('reports a missing asset by the URL the page has, and the paths it looked at', () => {
+    const root = makeFixtureRoot();
+    let message = '';
+
+    try {
+      validate('<link rel="stylesheet" href="/repo/missing.css">', { root });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+
+    expect(message).toContain('Missing stylesheet asset: /repo/missing.css');
+    expect(message).toContain(path.join(root, 'src', 'missing.css'));
+    expect(message).toContain(path.join(root, 'public', 'missing.css'));
+    expect(message).not.toContain(path.join('src', 'repo'));
+  });
+
+  it('points out a base written in by hand, which ends up there twice', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'site.css'), 'body{}');
+
+    expect(() =>
+      validate('<link rel="stylesheet" href="/repo/repo/site.css">', { root }),
+    ).toThrow(/base \(\/repo\/\) twice[\s\S]*Write "\/site\.css"/);
+  });
+
+  it('still checks a URL that does not carry the base', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'site.css'), 'body{}');
+
+    // Not rebased (say, written into an event handler), so it is read
+    // as root-relative: present, and so accepted...
+    expect(() =>
+      validate('<link rel="stylesheet" href="/site.css">', { root }),
+    ).not.toThrow();
+
+    // ...or missing, and reported.
+    expect(() =>
+      validate('<script src="/gone.js"></script>', { root }),
+    ).toThrow(/gone\.js/);
+  });
+
+  it('matches externalAssets, written for the root, against the URL less its base', () => {
+    expect(() =>
+      validate(
+        `<script src="/repo/su/boot.js"></script>
+         <link rel="stylesheet" href="/repo/su/theme.css">`,
+        { externalAssets: '/su/' },
+      ),
+    ).not.toThrow();
+  });
+
+  it('matches an exact externalAssets entry under a base', () => {
+    expect(() =>
+      validate('<script src="/repo/su.js"></script>', { externalAssets: '/su.js' }),
+    ).not.toThrow();
+
+    expect(() =>
+      validate('<script src="/repo/su.js.map.js"></script>', { externalAssets: '/su.js' }),
+    ).toThrow(/su\.js\.map\.js/);
+  });
+
+  it('silences the dynamic import warning for externalAssets under a base', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      validate(
+        `<button onclick="import('/repo/su/alert.js').then(m=>m.dismiss(this))"></button>`,
+        { externalAssets: ['/su/'] },
+      );
+
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not let an externalAssets entry match the base itself', () => {
+    // `/repo/` as written would cover everything under the base once the
+    // base is off — it has to be read as a root path.
+    expect(() =>
+      validate('<script src="/repo/missing.js"></script>', { externalAssets: '/repo/' }),
+    ).toThrow(/missing\.js/);
+  });
+
+  it('takes off a full URL base', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'site.css'), 'body{}');
+
+    expect(() =>
+      validate('<link rel="stylesheet" href="https://cdn.example.com/repo/site.css">', {
+        root,
+        base: 'https://cdn.example.com/repo/',
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validate('<link rel="stylesheet" href="https://cdn.example.com/repo/gone.css">', {
+        root,
+        base: 'https://cdn.example.com/repo/',
+      }),
+    ).toThrow(/gone\.css/);
+  });
+
+  it('takes off a relative page base', () => {
+    const root = makeFixtureRoot();
+    fs.writeFileSync(path.join(root, 'src', 'site.css'), 'body{}');
+
+    expect(() =>
+      validate('<link rel="stylesheet" href="../../site.css">', { root, base: '../../' }),
+    ).not.toThrow();
+  });
+});
+
 describe('collectLocalAssetUrls', () => {
   it('collects root-relative href and src urls', () => {
     const html = `
@@ -228,6 +373,22 @@ describe('collectLocalAssetUrls', () => {
     `;
 
     expect(collectLocalAssetUrls(html)).toEqual(['/about']);
+  });
+
+  it('takes the base off before collecting', () => {
+    const html = `
+      <link rel="stylesheet" href="/repo/styles.css?v=2">
+      <script src="/repo/main.js"></script>
+      <button onclick="import('/repo/widgets/chart.js')"></button>
+      <a href="/elsewhere">Out</a>
+    `;
+
+    expect(collectLocalAssetUrls(html, '/repo/').sort()).toEqual([
+      '/elsewhere',
+      '/main.js',
+      '/styles.css',
+      '/widgets/chart.js',
+    ]);
   });
 
   it('deduplicates repeated references', () => {

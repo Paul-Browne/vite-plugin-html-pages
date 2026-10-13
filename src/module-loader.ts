@@ -186,6 +186,8 @@ export async function createPageModuleLoader(args: {
   getPages?: () => Promise<HtPageInfo[]>;
   configFile?: string;
   configMode?: string;
+  /** The build's resolved `base`, which a `--base` flag never puts in the config file. */
+  base?: string;
 }): Promise<PageModuleLoaderHandle> {
   const { mode, root, server, getPages } = args;
 
@@ -218,6 +220,9 @@ export async function createPageModuleLoader(args: {
   const config: InlineConfig = {
     ...userConfig,
     root,
+    // So import.meta.env.BASE_URL in a page module is what the dev
+    // server gives it.
+    base: args.base ?? userConfig.base,
     mode: configMode,
     configFile: false,
     logLevel: 'error',

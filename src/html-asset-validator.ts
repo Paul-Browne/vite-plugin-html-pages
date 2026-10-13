@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { stripBase } from './base-url.js';
+
 export interface HtmlAssetValidationOptions {
   root: string;
   pagesDir: string;
@@ -9,6 +11,14 @@ export interface HtmlAssetValidationOptions {
   pageLabel?: string;
   missingAssets?: 'error' | 'warn';
   externalAssets?: string | string[];
+  /**
+   * The base the page's URLs were written with — Vite's `base`, or for a
+   * relative base the page's path back to the output root. It comes off
+   * a URL before the URL is looked up on disk or matched against
+   * `externalAssets`, both of which are written for the site root.
+   * Defaults to `/`.
+   */
+  base?: string;
 }
 
 function stripQueryAndHash(url: string): string {
@@ -122,54 +132,72 @@ function collectHrefSrcUrls(html: string): string[] {
 
 /**
  * Collects every root-relative URL the HTML references (any href/src
- * attribute plus literal dynamic imports), with query/hash stripped.
- * Used to decide which source assets must be emitted at build time.
+ * attribute plus literal dynamic imports), with `base` taken off and
+ * query/hash stripped. Used to decide which source assets must be
+ * emitted at build time.
  */
-export function collectLocalAssetUrls(html: string): string[] {
+export function collectLocalAssetUrls(html: string, base = '/'): string[] {
   const candidates = [
     ...collectHrefSrcUrls(html),
     ...collectLiteralDynamicImports(html),
   ];
 
-  return unique(candidates.filter(isLocalRootUrl).map(stripQueryAndHash));
+  return unique(
+    candidates
+      .map((url) => stripBase(url, base))
+      .filter(isLocalRootUrl)
+      .map(stripQueryAndHash),
+  );
 }
 
 function formatPageLabel(pageLabel?: string): string {
   return pageLabel ? ` (${pageLabel})` : '';
 }
 
-function missingAssetMessage(args: {
+type MissingAsset = {
   pluginName: string;
   kind: string;
+  /** As the page has it. */
   url: string;
+  /** What it stands for at the site root, with the base taken off. */
+  sitePath: string;
+  base: string;
   root: string;
   pagesDir: string;
   pageLabel?: string;
-}): string {
-  const { pluginName, kind, url, root, pagesDir, pageLabel } = args;
-  const clean = stripQueryAndHash(url).slice(1);
+};
+
+function missingAssetMessage(args: MissingAsset): string {
+  const { pluginName, kind, url, sitePath, base, root, pagesDir, pageLabel } = args;
+  const clean = stripQueryAndHash(sitePath).slice(1);
   const pageSuffix = formatPageLabel(pageLabel);
 
-  return (
+  const message =
     `[${pluginName}] Missing ${kind}${pageSuffix}: ${url}\n` +
     `Expected one of:\n` +
     `- ${path.join(root, pagesDir, clean)}\n` +
-    `- ${path.join(root, 'public', clean)}`
+    `- ${path.join(root, 'public', clean)}`;
+
+  // The base twice over is a page that wrote it in by hand, on a URL
+  // the build — like the dev server — puts it on anyway.
+  const once = stripBase(sitePath, base);
+
+  if (once === sitePath || !fileExistsForPublicUrl(root, pagesDir, once)) {
+    return message;
+  }
+
+  return (
+    `${message}\n` +
+    `It has Vite's base (${base}) twice: page HTML is written for the site ` +
+    `root, and the base is added to asset URLs for you, in dev and build ` +
+    `alike. Write "${once}".`
   );
 }
 
-function reportMissing(args: {
-  mode: 'error' | 'warn';
-  pluginName: string;
-  kind: string;
-  url: string;
-  root: string;
-  pagesDir: string;
-  pageLabel?: string;
-}) {
-  const message = missingAssetMessage(args);
+function reportMissing(mode: 'error' | 'warn', asset: MissingAsset) {
+  const message = missingAssetMessage(asset);
 
-  if (args.mode === 'warn') {
+  if (mode === 'warn') {
     console.warn(`⚠️ ${message}`);
     return;
   }
@@ -188,6 +216,7 @@ export function validateHtmlAssetReferences(
     pageLabel,
     missingAssets = 'error',
     externalAssets,
+    base = '/',
   } = options;
 
   /*
@@ -195,56 +224,46 @@ export function validateHtmlAssetReferences(
    * `public/` to find, so checking for one only ever produces a false
    * report. Applied to all three kinds: whatever serves the URL serves
    * it whether a page reached it by `src`, `href`, or `import()`.
+   *
+   * Both lookups are laid out for the site root, so the base comes off
+   * a URL first.
    */
   const external = normalizeExternalAssets(externalAssets);
-  const isCheckable = (url: string) =>
-    isLocalRootUrl(url) && !matchesExternalAsset(url, external);
+  const checkable = (urls: string[]) =>
+    unique(urls)
+      .map((url) => ({ url, sitePath: stripBase(url, base) }))
+      .filter(
+        ({ sitePath }) =>
+          isLocalRootUrl(sitePath) && !matchesExternalAsset(sitePath, external),
+      );
 
-  const scriptSrcs = unique(collectScriptSrcs(html)).filter(isCheckable);
-  const stylesheetHrefs = unique(collectStylesheetHrefs(html)).filter(isCheckable);
-  const literalDynamicImports = unique(collectLiteralDynamicImports(html)).filter(
-    isCheckable,
-  );
+  const describe = (kind: string, url: string, sitePath: string): MissingAsset => ({
+    pluginName,
+    kind,
+    url,
+    sitePath,
+    base,
+    root,
+    pagesDir,
+    pageLabel,
+  });
 
-  for (const url of scriptSrcs) {
-    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
-      reportMissing({
-        mode: missingAssets,
-        pluginName,
-        kind: 'JavaScript asset',
-        url,
-        root,
-        pagesDir,
-        pageLabel,
-      });
+  for (const { url, sitePath } of checkable(collectScriptSrcs(html))) {
+    if (!fileExistsForPublicUrl(root, pagesDir, sitePath)) {
+      reportMissing(missingAssets, describe('JavaScript asset', url, sitePath));
     }
   }
 
-  for (const url of stylesheetHrefs) {
-    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
-      reportMissing({
-        mode: missingAssets,
-        pluginName,
-        kind: 'stylesheet asset',
-        url,
-        root,
-        pagesDir,
-        pageLabel,
-      });
+  for (const { url, sitePath } of checkable(collectStylesheetHrefs(html))) {
+    if (!fileExistsForPublicUrl(root, pagesDir, sitePath)) {
+      reportMissing(missingAssets, describe('stylesheet asset', url, sitePath));
     }
   }
 
-  for (const url of literalDynamicImports) {
-    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
+  for (const { url, sitePath } of checkable(collectLiteralDynamicImports(html))) {
+    if (!fileExistsForPublicUrl(root, pagesDir, sitePath)) {
       console.warn(
-        `⚠️ ${missingAssetMessage({
-          pluginName,
-          kind: 'literal dynamic import',
-          url,
-          root,
-          pagesDir,
-          pageLabel,
-        })}`,
+        `⚠️ ${missingAssetMessage(describe('literal dynamic import', url, sitePath))}`,
       );
     }
   }

@@ -426,6 +426,164 @@ var RESOLVED_VIRTUAL_JSX_RUNTIME_ID = `\0${VIRTUAL_JSX_RUNTIME_ID}`;
 var RESOLVED_VIRTUAL_JSX_DEV_RUNTIME_ID = `\0${VIRTUAL_JSX_DEV_RUNTIME_ID}`;
 var VIRTUAL_LOCAL_TYPES_PREFIX = `\0${PLUGIN_NAME}:local-types:`;
 
+// src/base-url.ts
+var ALLOWED_META_NAME = [
+  "msapplication-tileimage",
+  "msapplication-square70x70logo",
+  "msapplication-square150x150logo",
+  "msapplication-wide310x150logo",
+  "msapplication-square310x310logo",
+  "msapplication-config",
+  "twitter:image"
+];
+var ALLOWED_META_PROPERTY = [
+  "og:image",
+  "og:image:url",
+  "og:image:secure_url",
+  "og:audio",
+  "og:audio:secure_url",
+  "og:video",
+  "og:video:secure_url"
+];
+var DEFAULT_HTML_ASSET_SOURCES = {
+  audio: { srcAttributes: ["src"] },
+  embed: { srcAttributes: ["src"] },
+  img: { srcAttributes: ["src"], srcsetAttributes: ["srcset"] },
+  image: { srcAttributes: ["href", "xlink:href"] },
+  input: { srcAttributes: ["src"] },
+  link: { srcAttributes: ["href"], srcsetAttributes: ["imagesrcset"] },
+  object: { srcAttributes: ["data"] },
+  script: { srcAttributes: ["src"] },
+  source: { srcAttributes: ["src"], srcsetAttributes: ["srcset"] },
+  track: { srcAttributes: ["src"] },
+  use: { srcAttributes: ["href", "xlink:href"] },
+  video: { srcAttributes: ["src", "poster"] },
+  meta: {
+    srcAttributes: ["content"],
+    filter({ attributes }) {
+      const name = attributes.name?.trim().toLowerCase();
+      const property = attributes.property?.trim().toLowerCase();
+      return !!name && ALLOWED_META_NAME.includes(name) || !!property && ALLOWED_META_PROPERTY.includes(property);
+    }
+  }
+};
+var ATTRS = `(?:[^>"']|"[^"]*"|'[^']*')*`;
+var MARKUP_RE = new RegExp(
+  `<!--[\\s\\S]*?(?:-->|$)|<(script|style|textarea|title|xmp|iframe|noembed|noframes)(?=[\\s/>])(${ATTRS})>([\\s\\S]*?)(<\\/\\1\\s*>|$)|<([a-zA-Z][^\\s/>]*)(${ATTRS})>`,
+  "gi"
+);
+var ATTR_RE = /(\s*)([^\s"'<>/=]+)(?:(\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+var INLINE_IMPORT_RE = /((?<!(?<!\.\.)\.)\bimport\s*\(\s*)(["'])([^"'`]*)\2(?=\s*\))/g;
+function isRootRelative(url) {
+  return url[0] === "/" && url[1] !== "/";
+}
+function isRelativeBase(base) {
+  return base === "" || base.startsWith(".");
+}
+function pageBase(base, fileName) {
+  if (isRelativeBase(base)) {
+    const depth = fileName.replace(/\\/g, "/").replace(/^\/+/, "").split("/").length - 1;
+    return depth === 0 ? "./" : "../".repeat(depth);
+  }
+  return base.endsWith("/") ? base : `${base}/`;
+}
+function joinBase(url, base) {
+  return isRootRelative(url) ? base + url.slice(1) : url;
+}
+function stripBase(url, base) {
+  if (base === "/" || !url.startsWith(base)) return url;
+  return `/${url.slice(base.length)}`;
+}
+function joinBaseToSrcset(srcset, base) {
+  let out = "";
+  let i = 0;
+  while (i < srcset.length) {
+    const gap = /^[\s,]*/.exec(srcset.slice(i))[0];
+    out += gap;
+    i += gap.length;
+    if (i >= srcset.length) break;
+    const token = /^\S+/.exec(srcset.slice(i))[0];
+    const url = token.replace(/,+$/, "");
+    out += joinBase(url, base) + token.slice(url.length);
+    i += token.length;
+    if (url !== token) continue;
+    let depth = 0;
+    const start = i;
+    for (; i < srcset.length; i++) {
+      const char = srcset[i];
+      if (char === "(") depth++;
+      else if (char === ")") depth = Math.max(0, depth - 1);
+      else if (char === "," && depth === 0) break;
+    }
+    out += srcset.slice(start, i);
+  }
+  return out;
+}
+function parseAttributes(attrs) {
+  const out = {};
+  for (const match of attrs.matchAll(ATTR_RE)) {
+    const key = match[2].toLowerCase();
+    if (!(key in out)) out[key] = match[4] ?? match[5] ?? match[6] ?? "";
+  }
+  return out;
+}
+function rewriteAttributes(tagName, attrs, base, additionalAssetSources) {
+  const name = tagName.toLowerCase();
+  const sources = [
+    DEFAULT_HTML_ASSET_SOURCES[name],
+    additionalAssetSources?.[name]
+  ].filter((source) => !!source);
+  if (sources.length === 0) return attrs;
+  const attributes = parseAttributes(attrs);
+  if ("vite-ignore" in attributes) {
+    return attrs.replace(
+      ATTR_RE,
+      (whole, _lead, key) => key.toLowerCase() === "vite-ignore" ? "" : whole
+    );
+  }
+  const srcKeys = /* @__PURE__ */ new Set();
+  const srcsetKeys = /* @__PURE__ */ new Set();
+  for (const source of sources) {
+    const wanted = (key) => {
+      const value = attributes[key];
+      return !!value && (!source.filter || source.filter({ key, value, attributes }));
+    };
+    source.srcAttributes?.filter(wanted).forEach((key) => srcKeys.add(key));
+    source.srcsetAttributes?.filter(wanted).forEach((key) => srcsetKeys.add(key));
+  }
+  if (srcKeys.size === 0 && srcsetKeys.size === 0) return attrs;
+  return attrs.replace(
+    ATTR_RE,
+    (whole, lead, key, equals, doubleQuoted, singleQuoted, unquoted) => {
+      const value = doubleQuoted ?? singleQuoted ?? unquoted;
+      const lowerKey = key.toLowerCase();
+      if (value === void 0) return whole;
+      const rewritten = srcKeys.has(lowerKey) ? joinBase(value, base) : srcsetKeys.has(lowerKey) ? joinBaseToSrcset(value, base) : value;
+      if (rewritten === value) return whole;
+      const quote = doubleQuoted !== void 0 ? '"' : singleQuoted !== void 0 ? "'" : "";
+      return `${lead}${key}${equals}${quote}${rewritten}${quote}`;
+    }
+  );
+}
+function applyBaseToHtml(html, base, additionalAssetSources) {
+  if (base === "/") return html;
+  return html.replace(
+    MARKUP_RE,
+    (whole, textTag, textAttrs, text, textClose, tag, attrs) => {
+      if (tag) {
+        return `<${tag}${rewriteAttributes(tag, attrs, base, additionalAssetSources)}>`;
+      }
+      if (!textTag) return whole;
+      const isInlineScript = textTag.toLowerCase() === "script" && !("src" in parseAttributes(textAttrs));
+      const content = isInlineScript ? text.replace(
+        INLINE_IMPORT_RE,
+        (_, open, quote, url) => `${open}${quote}${joinBase(url, base)}${quote}`
+      ) : text;
+      return `<${textTag}${rewriteAttributes(textTag, textAttrs, base, additionalAssetSources)}>${content}${textClose}`;
+    }
+  );
+}
+
 // src/discover.ts
 import path4 from "path";
 
@@ -986,6 +1144,9 @@ async function createPageModuleLoader(args) {
   const config = {
     ...userConfig,
     root,
+    // So import.meta.env.BASE_URL in a page module is what the dev
+    // server gives it.
+    base: args.base ?? userConfig.base,
     mode: configMode,
     configFile: false,
     logLevel: "error",
@@ -1256,6 +1417,12 @@ function normalizeRoutePath2(input) {
   }
   return value;
 }
+function stripDevBase(url, base, middlewareMode) {
+  if (base === "/" || url.startsWith(base)) {
+    return { url: `/${url.slice(base.length)}`, base };
+  }
+  return middlewareMode ? { url, base: "/" } : null;
+}
 function shouldSkipHtmlRouting(url, pagesDir) {
   return url.startsWith("/@vite") || url.startsWith("/@fs/") || url.startsWith("/node_modules/") || url.startsWith(`/${pagesDir}/`) || url === "/favicon.ico" || isStaticAssetRequest(url);
 }
@@ -1296,13 +1463,19 @@ function installDevServer(args) {
   });
   server.middlewares.use(async (req, res, next) => {
     try {
-      const originalUrl = req.url ?? "/";
+      const request = stripDevBase(
+        req.url ?? "/",
+        server.config.base,
+        !!server.config.server.middlewareMode
+      );
+      if (!request) return next();
+      const originalUrl = request.url;
       const url = normalizeRoutePath2(originalUrl);
       const rewrittenAssetUrl = tryRewriteRootAssetToSrc(root, pagesDir, url);
       if (rewrittenAssetUrl) {
         const suffixIndex = originalUrl.search(/[?#]/);
         const suffix = suffixIndex === -1 ? "" : originalUrl.slice(suffixIndex);
-        req.url = rewrittenAssetUrl + suffix;
+        req.url = request.base + rewrittenAssetUrl.slice(1) + suffix;
         return next();
       }
       if (shouldSkipHtmlRouting(url, pagesDir)) {
@@ -1427,28 +1600,36 @@ function collectHrefSrcUrls(html) {
   }
   return out;
 }
-function collectLocalAssetUrls(html) {
+function collectLocalAssetUrls(html, base = "/") {
   const candidates = [
     ...collectHrefSrcUrls(html),
     ...collectLiteralDynamicImports(html)
   ];
-  return unique(candidates.filter(isLocalRootUrl).map(stripQueryAndHash));
+  return unique(
+    candidates.map((url) => stripBase(url, base)).filter(isLocalRootUrl).map(stripQueryAndHash)
+  );
 }
 function formatPageLabel(pageLabel) {
   return pageLabel ? ` (${pageLabel})` : "";
 }
 function missingAssetMessage(args) {
-  const { pluginName, kind, url, root, pagesDir, pageLabel } = args;
-  const clean = stripQueryAndHash(url).slice(1);
+  const { pluginName, kind, url, sitePath, base, root, pagesDir, pageLabel } = args;
+  const clean = stripQueryAndHash(sitePath).slice(1);
   const pageSuffix = formatPageLabel(pageLabel);
-  return `[${pluginName}] Missing ${kind}${pageSuffix}: ${url}
+  const message = `[${pluginName}] Missing ${kind}${pageSuffix}: ${url}
 Expected one of:
 - ${path7.join(root, pagesDir, clean)}
 - ${path7.join(root, "public", clean)}`;
+  const once = stripBase(sitePath, base);
+  if (once === sitePath || !fileExistsForPublicUrl(root, pagesDir, once)) {
+    return message;
+  }
+  return `${message}
+It has Vite's base (${base}) twice: page HTML is written for the site root, and the base is added to asset URLs for you, in dev and build alike. Write "${once}".`;
 }
-function reportMissing(args) {
-  const message = missingAssetMessage(args);
-  if (args.mode === "warn") {
+function reportMissing(mode, asset) {
+  const message = missingAssetMessage(asset);
+  if (mode === "warn") {
     console.warn(`\u26A0\uFE0F ${message}`);
     return;
   }
@@ -1462,52 +1643,37 @@ function validateHtmlAssetReferences(options) {
     pluginName,
     pageLabel,
     missingAssets = "error",
-    externalAssets
+    externalAssets,
+    base = "/"
   } = options;
   const external = normalizeExternalAssets(externalAssets);
-  const isCheckable = (url) => isLocalRootUrl(url) && !matchesExternalAsset(url, external);
-  const scriptSrcs = unique(collectScriptSrcs(html)).filter(isCheckable);
-  const stylesheetHrefs = unique(collectStylesheetHrefs(html)).filter(isCheckable);
-  const literalDynamicImports = unique(collectLiteralDynamicImports(html)).filter(
-    isCheckable
+  const checkable = (urls) => unique(urls).map((url) => ({ url, sitePath: stripBase(url, base) })).filter(
+    ({ sitePath }) => isLocalRootUrl(sitePath) && !matchesExternalAsset(sitePath, external)
   );
-  for (const url of scriptSrcs) {
-    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
-      reportMissing({
-        mode: missingAssets,
-        pluginName,
-        kind: "JavaScript asset",
-        url,
-        root,
-        pagesDir,
-        pageLabel
-      });
+  const describe = (kind, url, sitePath) => ({
+    pluginName,
+    kind,
+    url,
+    sitePath,
+    base,
+    root,
+    pagesDir,
+    pageLabel
+  });
+  for (const { url, sitePath } of checkable(collectScriptSrcs(html))) {
+    if (!fileExistsForPublicUrl(root, pagesDir, sitePath)) {
+      reportMissing(missingAssets, describe("JavaScript asset", url, sitePath));
     }
   }
-  for (const url of stylesheetHrefs) {
-    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
-      reportMissing({
-        mode: missingAssets,
-        pluginName,
-        kind: "stylesheet asset",
-        url,
-        root,
-        pagesDir,
-        pageLabel
-      });
+  for (const { url, sitePath } of checkable(collectStylesheetHrefs(html))) {
+    if (!fileExistsForPublicUrl(root, pagesDir, sitePath)) {
+      reportMissing(missingAssets, describe("stylesheet asset", url, sitePath));
     }
   }
-  for (const url of literalDynamicImports) {
-    if (!fileExistsForPublicUrl(root, pagesDir, url)) {
+  for (const { url, sitePath } of checkable(collectLiteralDynamicImports(html))) {
+    if (!fileExistsForPublicUrl(root, pagesDir, sitePath)) {
       console.warn(
-        `\u26A0\uFE0F ${missingAssetMessage({
-          pluginName,
-          kind: "literal dynamic import",
-          url,
-          root,
-          pagesDir,
-          pageLabel
-        })}`
+        `\u26A0\uFE0F ${missingAssetMessage(describe("literal dynamic import", url, sitePath))}`
       );
     }
   }
@@ -1808,6 +1974,7 @@ function htPages(options = {}) {
   let userConfigFile;
   let resolvedMode = "production";
   let resolvedBase = "/";
+  let additionalAssetSources;
   let buildPipelinePromise = null;
   const cleanUrls = options.cleanUrls ?? true;
   const pagesDir = options.pagesDir ?? "src";
@@ -1865,7 +2032,8 @@ function htPages(options = {}) {
       root,
       getPages: async () => entries,
       configFile: userConfigFile,
-      configMode: resolvedMode
+      configMode: resolvedMode,
+      base: resolvedBase
     });
     try {
       const modulesByEntry = /* @__PURE__ */ new Map();
@@ -2007,6 +2175,7 @@ export {
       userConfigFile = resolved.configFile ?? void 0;
       resolvedMode = resolved.mode;
       resolvedBase = resolved.base || "/";
+      additionalAssetSources = resolved.html?.additionalAssetSources;
       if (!hasWarnedESM) {
         warnIfNotESM(root);
         hasWarnedESM = true;
@@ -2104,6 +2273,14 @@ export {
         const limit = pLimit(options.renderConcurrency ?? 8);
         const batchSize = options.renderBatchSize ?? Math.max(options.renderConcurrency ?? 8, 32);
         const renderedPages = [];
+        let notFoundSource;
+        const withBase = (source, fileName) => {
+          const base = pageBase(resolvedBase, fileName);
+          return {
+            base,
+            html: applyBaseToHtml(source, base, additionalAssetSources)
+          };
+        };
         for (const batch of chunkArray(pages, batchSize)) {
           await Promise.all(
             batch.map(
@@ -2114,7 +2291,9 @@ export {
                     brand(`Missing module for page entry: ${page.entryPath}`)
                   );
                 }
-                const html = await renderPage(page, mod, false);
+                const source = await renderPage(page, mod, false);
+                const fileName = options.mapOutputPath?.(page) ?? page.fileName;
+                const { base, html } = withBase(source, fileName);
                 validateHtmlAssetReferences({
                   root,
                   pagesDir,
@@ -2122,29 +2301,29 @@ export {
                   pluginName: PLUGIN_NAME,
                   pageLabel: page.relativePath,
                   missingAssets: options.missingAssets ?? "error",
-                  externalAssets: options.externalAssets
+                  externalAssets: options.externalAssets,
+                  base
                 });
-                renderedPages.push({ page, html });
+                if (page.routePath === "/404") notFoundSource = source;
+                renderedPages.push({ page, fileName, base, html });
               })
             )
           );
         }
-        const rendered404 = renderedPages.find(
-          (rendered) => rendered.page.routePath === "/404"
-        );
-        const notFoundHtml = rendered404?.html ?? defaultNotFoundHtml(resolvedBase);
+        const notFound = notFoundSource != null ? withBase(notFoundSource, "404.html") : {
+          base: pageBase(resolvedBase, "404.html"),
+          html: defaultNotFoundHtml(resolvedBase)
+        };
+        const notFoundHtml = notFound.html;
         logDebug(
           options.debug,
-          rendered404 ? "generated 404.html from user page" : "generated default 404.html"
+          notFoundSource != null ? "generated 404.html from user page" : "generated default 404.html"
         );
         const referencedUrls = /* @__PURE__ */ new Set();
-        for (const { html } of renderedPages) {
-          for (const url of collectLocalAssetUrls(html)) {
+        for (const { html, base } of [...renderedPages, notFound]) {
+          for (const url of collectLocalAssetUrls(html, base)) {
             referencedUrls.add(url);
           }
-        }
-        for (const url of collectLocalAssetUrls(notFoundHtml)) {
-          referencedUrls.add(url);
         }
         const staticAssets = await collectStaticAssets({
           root,
@@ -2201,10 +2380,10 @@ export {
             source
           });
         }
-        for (const { page, html } of renderedPages) {
+        for (const { fileName, html } of renderedPages) {
           this.emitFile({
             type: "asset",
-            fileName: options.mapOutputPath?.(page) ?? page.fileName,
+            fileName,
             source: html
           });
         }

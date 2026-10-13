@@ -54,6 +54,29 @@ function normalizeRoutePath(input: string): string {
   return value;
 }
 
+/**
+ * The request with Vite's base taken off, or `null` when it is outside
+ * the base.
+ *
+ * This middleware runs before Vite's own base middleware, so it sees
+ * the base still on. Pages and assets live under the base, as they do
+ * once `dist/` is deployed; a URL outside it is Vite's to answer, which
+ * it does by redirecting `/` to the base and pointing anything else at
+ * it. In middleware mode Vite lets such a URL through untouched, and so
+ * does this.
+ */
+function stripDevBase(
+  url: string,
+  base: string,
+  middlewareMode: boolean,
+): { url: string; base: string } | null {
+  if (base === '/' || url.startsWith(base)) {
+    return { url: `/${url.slice(base.length)}`, base };
+  }
+
+  return middlewareMode ? { url, base: '/' } : null;
+}
+
 function shouldSkipHtmlRouting(url: string, pagesDir: string): boolean {
   return (
     url.startsWith('/@vite') ||
@@ -127,7 +150,15 @@ export function installDevServer(args: {
 
   server.middlewares.use(async (req, res, next) => {
     try {
-      const originalUrl = req.url ?? '/';
+      const request = stripDevBase(
+        req.url ?? '/',
+        server.config.base,
+        !!server.config.server.middlewareMode,
+      );
+
+      if (!request) return next();
+
+      const originalUrl = request.url;
       const url = normalizeRoutePath(originalUrl);
 
       const rewrittenAssetUrl = tryRewriteRootAssetToSrc(root, pagesDir, url);
@@ -138,7 +169,8 @@ export function installDevServer(args: {
         const suffixIndex = originalUrl.search(/[?#]/);
         const suffix = suffixIndex === -1 ? '' : originalUrl.slice(suffixIndex);
 
-        req.url = rewrittenAssetUrl + suffix;
+        // Back under the base, for Vite's base middleware to take off.
+        req.url = request.base + rewrittenAssetUrl.slice(1) + suffix;
         return next();
       }
 
