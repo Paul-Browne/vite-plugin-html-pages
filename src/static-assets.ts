@@ -3,6 +3,7 @@ import path from 'node:path';
 import fg from 'fast-glob';
 import * as esbuild from 'esbuild';
 import fsSync from 'node:fs';
+import { transformWithOxc, type ResolvedConfig } from 'vite';
 import { brand } from './brand.js';
 
 export interface StaticAssetFile {
@@ -36,20 +37,80 @@ function shouldIgnoreFile(rel: string): boolean {
   );
 }
 
+/**
+ * Script sources esbuild writes out as `.js`. Pages reference them by
+ * their source name, which is what the dev server serves, and the build
+ * rewrites those URLs to the output name.
+ */
+export const COMPILED_TO_JS_EXTENSIONS = ['.ts', '.mts', '.tsx', '.jsx', '.mjs'];
+
+/**
+ * CommonJS, which browsers can't load. The build never emits these from
+ * the pages directory, referenced or not, so server-side code in them
+ * stays out of dist.
+ */
+export const COMMONJS_EXTENSIONS = ['.cjs', '.cts'];
+
 function isProcessableAsset(rel: string): boolean {
-  return (
-    rel.endsWith('.js') ||
-    rel.endsWith('.mjs') ||
-    rel.endsWith('.ts') ||
-    rel.endsWith('.css')
-  );
+  const ext = path.posix.extname(rel);
+
+  return ext === '.js' || ext === '.css' || COMPILED_TO_JS_EXTENSIONS.includes(ext);
 }
 
 function toOutputFileName(relativePathFromSrc: string): string {
-  if (relativePathFromSrc.endsWith('.ts')) {
-    return relativePathFromSrc.slice(0, -3) + '.js';
-  }
-  return relativePathFromSrc;
+  // By extension, not suffix: `.ts` is also the tail of `.mts`.
+  const ext = path.posix.extname(relativePathFromSrc);
+
+  return COMPILED_TO_JS_EXTENSIONS.includes(ext)
+    ? relativePathFromSrc.slice(0, -ext.length) + '.js'
+    : relativePathFromSrc;
+}
+
+/**
+ * Compiles JSX with the dev server's own transform and settings: tsconfig
+ * `jsx` / `jsxImportSource` (which Vite reads for `.tsx` but not
+ * `.jsx`), `oxc.jsx` from the Vite config, else React's automatic
+ * runtime. Left to itself, esbuild would apply tsconfig to `.jsx` too,
+ * ignore the Vite config, and fall back to `React.createElement`.
+ */
+function viteJsxPlugin(config: ResolvedConfig): esbuild.Plugin | null {
+  if (config.oxc === false) return null;
+
+  const {
+    jsxInject,
+    include,
+    exclude,
+    jsxRefreshInclude,
+    jsxRefreshExclude,
+    ...options
+  } = config.oxc;
+  // Same runtime, production flavour: Vite sets `development` from
+  // NODE_ENV, and this is a minified bundle whatever NODE_ENV says.
+  const jsx =
+    typeof options.jsx === 'object'
+      ? { ...options.jsx, development: false, refresh: false }
+      : options.jsx;
+
+  return {
+    name: 'html-pages-vite-jsx',
+    setup(build) {
+      build.onLoad({ filter: /\.[jt]sx$/ }, async (loadArgs) => {
+        const code = await fs.readFile(loadArgs.path, 'utf8');
+        const result = await transformWithOxc(
+          code,
+          loadArgs.path,
+          { ...options, jsx, sourcemap: false },
+          undefined,
+          config,
+        );
+
+        return {
+          contents: jsxInject ? `${jsxInject};${result.code}` : result.code,
+          loader: 'js',
+        };
+      });
+    },
+  };
 }
 
 export async function collectStaticAssets(
@@ -72,6 +133,7 @@ export async function collectStaticAssets(
 
     if (shouldIgnoreFile(rel)) continue;
     if (hasAnySuffix(rel, pageExtensions)) continue;
+    if (COMMONJS_EXTENSIONS.includes(path.posix.extname(rel))) continue;
 
     const absolutePath = path.join(srcDir, rel);
 
@@ -98,8 +160,17 @@ export async function buildProcessedStaticAssets(args: {
     assets: StaticAssetFile[];
     minify?: boolean;
     sourcemap?: boolean;
+    /** The resolved Vite config, so JSX compiles as it does in dev. */
+    viteConfig?: ResolvedConfig;
   }): Promise<Map<string, string | Uint8Array>> {
-    const { root, pagesDir, assets, minify = true, sourcemap = false } = args;
+    const {
+      root,
+      pagesDir,
+      assets,
+      minify = true,
+      sourcemap = false,
+      viteConfig,
+    } = args;
   
     const processable = assets.filter((a) => a.kind === 'process');
     const out = new Map<string, string | Uint8Array>();
@@ -111,6 +182,7 @@ export async function buildProcessedStaticAssets(args: {
     const srcDir = path.join(root, pagesDir);
     const distDir = path.join(root, 'dist');
     const warnedMissingAssets = new Set<string>();
+    const jsxPlugin = viteConfig ? viteJsxPlugin(viteConfig) : null;
     const result = await esbuild.build({
       entryPoints: processable.map((a) => a.absolutePath),
       absWorkingDir: root,
@@ -141,6 +213,7 @@ export async function buildProcessedStaticAssets(args: {
         '.otf': 'file',
       },
       plugins: [
+        ...(jsxPlugin ? [jsxPlugin] : []),
         {
           name: 'html-pages-root-url-resolver',
           setup(build) {

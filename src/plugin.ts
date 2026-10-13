@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { transform as esbuildTransform } from 'esbuild';
 import pLimit from 'p-limit';
-import type { HtmlAssetSource, Plugin, ViteDevServer } from 'vite';
+import type { Plugin, ResolvedConfig, ViteDevServer } from 'vite';
 
 import { writePageTypeDeclarations } from './typegen.js';
 import { formatDevPageError } from './format-dev-error.js';
@@ -26,6 +26,7 @@ import { discoverEntryPages } from './discover.js';
 import { installDevServer } from './dev-server.js';
 import {
   collectLocalAssetUrls,
+  rewriteCompiledAssetUrls,
   validateHtmlAssetReferences,
 } from './html-asset-validator.js';
 import {
@@ -179,7 +180,7 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
   let userConfigFile: string | undefined;
   let resolvedMode = 'production';
   let resolvedBase = '/';
-  let additionalAssetSources: Record<string, HtmlAssetSource> | undefined;
+  let viteConfig: ResolvedConfig | undefined;
   let buildPipelinePromise: Promise<BuildPipeline> | null = null;
 
   const cleanUrls = options.cleanUrls ?? true;
@@ -438,7 +439,7 @@ export {
       userConfigFile = resolved.configFile ?? undefined;
       resolvedMode = resolved.mode;
       resolvedBase = resolved.base || '/';
-      additionalAssetSources = resolved.html?.additionalAssetSources;
+      viteConfig = resolved;
 
       if (!hasWarnedESM) {
         warnIfNotESM(root);
@@ -577,7 +578,6 @@ export {
         const renderedPages: Array<{
           page: HtPageInfo;
           fileName: string;
-          base: string;
           html: string;
         }> = [];
         let notFoundSource: string | undefined;
@@ -587,14 +587,12 @@ export {
          * where the dev server's transformIndexHtml would put it. Each
          * file gets its own, since a relative base differs by depth.
          */
-        const withBase = (source: string, fileName: string) => {
-          const base = pageBase(resolvedBase, fileName);
-
-          return {
-            base,
-            html: applyBaseToHtml(source, base, additionalAssetSources),
-          };
-        };
+        const withBase = (source: string, fileName: string) =>
+          applyBaseToHtml(
+            source,
+            pageBase(resolvedBase, fileName),
+            viteConfig?.html?.additionalAssetSources,
+          );
 
         for (const batch of chunkArray(pages, batchSize)) {
           await Promise.all(
@@ -610,7 +608,7 @@ export {
 
                 const source = await renderPage(page, mod, false);
                 const fileName = options.mapOutputPath?.(page) ?? page.fileName;
-                const { base, html } = withBase(source, fileName);
+                const html = withBase(source, fileName);
 
                 // What ships is what gets checked, base and all.
                 validateHtmlAssetReferences({
@@ -619,27 +617,24 @@ export {
                   html,
                   pluginName: PLUGIN_NAME,
                   pageLabel: page.relativePath,
+                  pageFileName: fileName,
                   missingAssets: options.missingAssets ?? 'error',
                   externalAssets: options.externalAssets,
-                  base,
+                  base: resolvedBase,
                 });
 
                 if (page.routePath === '/404') notFoundSource = source;
 
-                renderedPages.push({ page, fileName, base, html });
+                renderedPages.push({ page, fileName, html });
               }),
             ),
           );
         }
 
-        const notFound =
+        const notFoundHtml =
           notFoundSource != null
             ? withBase(notFoundSource, '404.html')
-            : {
-                base: pageBase(resolvedBase, '404.html'),
-                html: defaultNotFoundHtml(resolvedBase),
-              };
-        const notFoundHtml = notFound.html;
+            : defaultNotFoundHtml(resolvedBase);
 
         logDebug(
           options.debug,
@@ -654,10 +649,14 @@ export {
         // always copied since they may be referenced from CSS.
         const referencedUrls = new Set<string>();
 
-        for (const { html, base } of [...renderedPages, notFound]) {
-          for (const url of collectLocalAssetUrls(html, base)) {
+        for (const { fileName, html } of renderedPages) {
+          for (const url of collectLocalAssetUrls(html, fileName, resolvedBase)) {
             referencedUrls.add(url);
           }
+        }
+
+        for (const url of collectLocalAssetUrls(notFoundHtml, '404.html', resolvedBase)) {
+          referencedUrls.add(url);
         }
 
         const staticAssets = await collectStaticAssets({
@@ -666,8 +665,9 @@ export {
           pageExtensions,
         });
 
+        // Pages reference sources by their own name (`/main.ts`), the
+        // URL the dev server answers; the output name is not a reference.
         const isReferenced = (asset: StaticAssetFile) =>
-          referencedUrls.has(`/${asset.outputFileName}`) ||
           referencedUrls.has(`/${asset.relativePathFromSrc}`);
 
         const processableAssets: StaticAssetFile[] = [];
@@ -709,6 +709,7 @@ export {
           assets: processableAssets,
           minify: true,
           sourcemap: false,
+          viteConfig,
         });
 
         for (const [fileName, source] of processedOutputs) {
@@ -717,6 +718,18 @@ export {
             fileName,
             source,
           });
+        }
+
+        // `/main.ts` was emitted as main.js, so the pages have to say so.
+        const compiledOutputPaths = new Map<string, string>();
+
+        for (const asset of processableAssets) {
+          if (asset.outputFileName !== asset.relativePathFromSrc) {
+            compiledOutputPaths.set(
+              `/${asset.relativePathFromSrc}`,
+              `/${asset.outputFileName}`,
+            );
+          }
         }
 
         for (const asset of staticAssets) {
@@ -735,14 +748,24 @@ export {
           this.emitFile({
             type: 'asset',
             fileName,
-            source: html,
+            source: rewriteCompiledAssetUrls(
+              html,
+              fileName,
+              compiledOutputPaths,
+              resolvedBase,
+            ),
           });
         }
 
         this.emitFile({
           type: 'asset',
           fileName: '404.html',
-          source: notFoundHtml,
+          source: rewriteCompiledAssetUrls(
+            notFoundHtml,
+            '404.html',
+            compiledOutputPaths,
+            resolvedBase,
+          ),
         });
 
         const sitemapBase = (options.site ?? '').replace(/\/+$/, '');

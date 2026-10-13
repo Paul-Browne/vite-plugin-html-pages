@@ -99,6 +99,24 @@ describe('build under a base', () => {
     expect(site.has('unused.js')).toBe(false);
   }, 30_000);
 
+  it('points a page at the compiled script, base and all', async () => {
+    const site = await buildSite(
+      {
+        'src/main.ts': 'const greeting: string = "hi";\nconsole.log(greeting);\n',
+        'src/index.ht.js': page('<script type="module" src="/main.ts"></script>'),
+        'src/blog/post.ht.js': page('<script type="module" src="../../main.ts"></script>'),
+      },
+      '/repo/',
+    );
+
+    expect(site.read('index.html')).toContain('<script type="module" src="/repo/main.js">');
+    // A relative URL is the page's own business: it resolves under the
+    // base already, and only its extension changes.
+    expect(site.read('blog/post/index.html')).toContain('<script type="module" src="../../main.js">');
+    expect(site.has('main.js')).toBe(true);
+    expect(site.has('main.ts')).toBe(false);
+  }, 30_000);
+
   it('gives nested pages and the 404 page the same base', async () => {
     const site = await buildSite(
       {

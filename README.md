@@ -62,7 +62,7 @@ That's the whole mental model. Everything else is convenience on top.
 - **Bring your own HTML** — template literals, [javascript-to-html](https://www.npmjs.com/package/javascript-to-html), or JSX/TSX
 - **Data loading** — `data()` runs at build time, with built-in fetch caching
 - **Typed pages** — per-route param types inferred from the filename
-- **Smart asset pipeline** — JS/TS/CSS referenced by your HTML is bundled and minified; server-only code never leaks into `dist`
+- **Smart asset pipeline** — JS/TS/JSX/CSS referenced by your HTML is bundled and minified; server-only code never leaks into `dist`
 - **Asset validation** — broken `<script src>` / stylesheet links fail the build
 - **Real dev server** — pages render on request (dynamic routes included, no `generateStaticParams` needed in dev) with full reload and readable error frames
 - **Parallel static generation** — renders large sites concurrently
@@ -378,7 +378,7 @@ export default () => `
   <html>
     <head>
       <link rel="stylesheet" href="/styles.css">
-      <script type="module" src="/main.js"></script>
+      <script type="module" src="/main.ts"></script>
     </head>
     <body>...</body>
   </html>
@@ -387,17 +387,35 @@ export default () => `
 
 At build time:
 
-- **Referenced JS / TS / CSS is bundled** with esbuild — imports are
-  inlined, output is minified, and `.ts` files compile to `.js`.
+- **Referenced JS / TS / JSX / CSS is bundled** with esbuild — imports
+  are inlined and output is minified.
+- **Compiled sources are referenced by their source name.** Write
+  `src="/main.ts"`; the build emits `main.js` and rewrites the URL in
+  the generated HTML to match. `.tsx`, `.jsx`, `.mts` and `.mjs`
+  likewise become `.js`. Code samples inside `<pre>` and `<code>`
+  keep the source name.
+- **JSX compiles the way the dev server compiles it** — same runtime,
+  from `oxc.jsx` in your Vite config or tsconfig `jsx` /
+  `jsxImportSource` (which Vite applies to `.tsx`, not `.jsx`), and
+  React's automatic runtime (`react/jsx-runtime`) when neither is set.
 - **Unreferenced code files are not emitted.** A helper like
-  `src/lib/api.ts` that you only import from `data()` stays out of
+  `src/lib/api.ts` that you only import from `data()`, or a
+  `src/components/Card.tsx` only your pages render, stays out of
   `dist/` — server-only code (and its secrets) never ships by accident.
+  CommonJS (`.cjs` / `.cts`) is never emitted, since browsers can't
+  load it; a page that references one fails the build.
 - **Everything else is copied** (images, fonts, videos, ...), so CSS
   `url()` references keep working.
 - **`public/` behaves like normal Vite** — copied verbatim.
 
 In dev, the same URLs are served through Vite's transform pipeline, so
-TypeScript and CSS work identically without a build.
+TypeScript, JSX and CSS work identically without a build.
+
+Relative URLs resolve the way the browser resolves them: against the
+page's own location (or its `<base href>`). On `src/blog/[slug].ht.js`,
+built to `blog/hello/index.html`, `href="styles.css"` means
+`/blog/hello/styles.css` — not `src/styles.css`. Use root-relative URLs
+for anything shared between pages.
 
 ### Serving from a sub-path (`base`)
 
@@ -427,15 +445,20 @@ The plugin follows Vite's own convention, in dev and build alike:
   and other URLs outside the base get Vite's "did you mean" page,
   matching the 404 a deployed site would give.
 
-A relative base (`./`) is written as the path from each page back to
-the site root, so `blog/post/index.html` links `../../site.css`.
+Relative URLs need no base: they resolve against the page, which is
+already under it. A relative base (`./`) is written as the path from
+each page back to the site root, so `blog/post/index.html` links
+`../../site.css`.
 
 ### Missing-asset validation
 
 Every generated page is checked: a `<script src="/x.js">` or stylesheet
 `href` pointing at a file that exists in neither `src/` nor `public/`
-**fails the build** with the exact paths that were checked. Prefer a
-warning instead?
+**fails the build** with the exact paths that were checked. Relative
+URLs are checked where they resolve from that page, and the error
+suggests the root-relative URL when that is what was meant — or the
+`.ts` / `.tsx` source, when a page asks for the `.js` it compiles to.
+Prefer a warning instead?
 
 ```js
 htmlPages({ missingAssets: 'warn' })

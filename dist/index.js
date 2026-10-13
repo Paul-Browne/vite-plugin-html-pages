@@ -490,10 +490,6 @@ function pageBase(base, fileName) {
 function joinBase(url, base) {
   return isRootRelative(url) ? base + url.slice(1) : url;
 }
-function stripBase(url, base) {
-  if (base === "/" || !url.startsWith(base)) return url;
-  return `/${url.slice(base.length)}`;
-}
 function joinBaseToSrcset(srcset, base) {
   let out = "";
   let i = 0;
@@ -1406,7 +1402,7 @@ var PLUGIN_VERSION = JSON.parse(
   )
 ).version;
 function isStaticAssetRequest(url) {
-  return url.endsWith(".css") || url.endsWith(".js") || url.endsWith(".mjs") || url.endsWith(".ts") || url.endsWith(".png") || url.endsWith(".jpg") || url.endsWith(".jpeg") || url.endsWith(".gif") || url.endsWith(".svg") || url.endsWith(".webp") || url.endsWith(".ico") || url.endsWith(".woff") || url.endsWith(".woff2") || url.endsWith(".ttf") || url.endsWith(".otf");
+  return url.endsWith(".css") || url.endsWith(".js") || url.endsWith(".mjs") || url.endsWith(".jsx") || url.endsWith(".ts") || url.endsWith(".mts") || url.endsWith(".tsx") || url.endsWith(".png") || url.endsWith(".jpg") || url.endsWith(".jpeg") || url.endsWith(".gif") || url.endsWith(".svg") || url.endsWith(".webp") || url.endsWith(".ico") || url.endsWith(".woff") || url.endsWith(".woff2") || url.endsWith(".ttf") || url.endsWith(".otf");
 }
 function normalizeRoutePath2(input) {
   let value = input.split("?")[0].split("#")[0];
@@ -1532,31 +1528,265 @@ function installDevServer(args) {
 }
 
 // src/html-asset-validator.ts
-import fs4 from "fs";
+import fs5 from "fs";
+import path8 from "path";
+
+// src/static-assets.ts
+import fs4 from "fs/promises";
 import path7 from "path";
-function stripQueryAndHash(url) {
-  return url.split("#")[0].split("?")[0];
+import fg from "fast-glob";
+import * as esbuild from "esbuild";
+import fsSync from "fs";
+import { transformWithOxc } from "vite";
+function normalizeSlashes(value) {
+  return value.replace(/\\/g, "/");
 }
-function isLocalRootUrl(url) {
-  return !!url && url.startsWith("/") && !url.startsWith("//");
+function hasAnySuffix(value, suffixes) {
+  return suffixes.some((suffix) => value.endsWith(suffix));
 }
-function matchesExternalAsset(url, patterns) {
-  const clean = stripQueryAndHash(url);
+function shouldIgnoreFile(rel) {
+  return rel.endsWith(".d.ts") || rel.endsWith(".map") || rel.endsWith(".tsbuildinfo") || rel.startsWith(".") || rel.includes("/.");
+}
+var COMPILED_TO_JS_EXTENSIONS = [".ts", ".mts", ".tsx", ".jsx", ".mjs"];
+var COMMONJS_EXTENSIONS = [".cjs", ".cts"];
+function isProcessableAsset(rel) {
+  const ext = path7.posix.extname(rel);
+  return ext === ".js" || ext === ".css" || COMPILED_TO_JS_EXTENSIONS.includes(ext);
+}
+function toOutputFileName(relativePathFromSrc) {
+  const ext = path7.posix.extname(relativePathFromSrc);
+  return COMPILED_TO_JS_EXTENSIONS.includes(ext) ? relativePathFromSrc.slice(0, -ext.length) + ".js" : relativePathFromSrc;
+}
+function viteJsxPlugin(config) {
+  if (config.oxc === false) return null;
+  const {
+    jsxInject,
+    include,
+    exclude,
+    jsxRefreshInclude,
+    jsxRefreshExclude,
+    ...options
+  } = config.oxc;
+  const jsx = typeof options.jsx === "object" ? { ...options.jsx, development: false, refresh: false } : options.jsx;
+  return {
+    name: "html-pages-vite-jsx",
+    setup(build2) {
+      build2.onLoad({ filter: /\.[jt]sx$/ }, async (loadArgs) => {
+        const code = await fs4.readFile(loadArgs.path, "utf8");
+        const result = await transformWithOxc(
+          code,
+          loadArgs.path,
+          { ...options, jsx, sourcemap: false },
+          void 0,
+          config
+        );
+        return {
+          contents: jsxInject ? `${jsxInject};${result.code}` : result.code,
+          loader: "js"
+        };
+      });
+    }
+  };
+}
+async function collectStaticAssets(args) {
+  const { root, pagesDir, pageExtensions } = args;
+  const srcDir = path7.join(root, pagesDir);
+  const entries = await fg("**/*", {
+    cwd: srcDir,
+    onlyFiles: true,
+    dot: false,
+    absolute: false
+  });
+  const assets = [];
+  for (const entry of entries) {
+    const rel = normalizeSlashes(entry);
+    if (shouldIgnoreFile(rel)) continue;
+    if (hasAnySuffix(rel, pageExtensions)) continue;
+    if (COMMONJS_EXTENSIONS.includes(path7.posix.extname(rel))) continue;
+    const absolutePath = path7.join(srcDir, rel);
+    assets.push({
+      absolutePath,
+      relativePathFromSrc: rel,
+      outputFileName: normalizeSlashes(toOutputFileName(rel)),
+      kind: isProcessableAsset(rel) ? "process" : "copy"
+    });
+  }
+  return assets;
+}
+async function copyStaticAssetSource(asset) {
+  return fs4.readFile(asset.absolutePath);
+}
+async function buildProcessedStaticAssets(args) {
+  const {
+    root,
+    pagesDir,
+    assets,
+    minify = true,
+    sourcemap = false,
+    viteConfig
+  } = args;
+  const processable = assets.filter((a) => a.kind === "process");
+  const out = /* @__PURE__ */ new Map();
+  if (processable.length === 0) {
+    return out;
+  }
+  const srcDir = path7.join(root, pagesDir);
+  const distDir = path7.join(root, "dist");
+  const warnedMissingAssets = /* @__PURE__ */ new Set();
+  const jsxPlugin = viteConfig ? viteJsxPlugin(viteConfig) : null;
+  const result = await esbuild.build({
+    entryPoints: processable.map((a) => a.absolutePath),
+    absWorkingDir: root,
+    outbase: srcDir,
+    outdir: distDir,
+    bundle: true,
+    splitting: true,
+    treeShaking: true,
+    minify,
+    sourcemap,
+    format: "esm",
+    target: "esnext",
+    platform: "browser",
+    write: false,
+    entryNames: "[dir]/[name]",
+    assetNames: "[dir]/[name]",
+    loader: {
+      ".css": "css",
+      ".png": "file",
+      ".jpg": "file",
+      ".jpeg": "file",
+      ".gif": "file",
+      ".svg": "file",
+      ".webp": "file",
+      ".woff": "file",
+      ".woff2": "file",
+      ".ttf": "file",
+      ".otf": "file"
+    },
+    plugins: [
+      ...jsxPlugin ? [jsxPlugin] : [],
+      {
+        name: "html-pages-root-url-resolver",
+        setup(build2) {
+          build2.onResolve({ filter: /^\// }, (resolveArgs) => {
+            if (path7.isAbsolute(resolveArgs.path) && fsSync.existsSync(resolveArgs.path)) {
+              return { path: resolveArgs.path };
+            }
+            const cleanPath = resolveArgs.path.slice(1);
+            const fromSrc = path7.join(srcDir, cleanPath);
+            if (fsSync.existsSync(fromSrc)) {
+              return { path: fromSrc };
+            }
+            const fromPublic = path7.join(root, "public", cleanPath);
+            if (fsSync.existsSync(fromPublic)) {
+              return {
+                path: resolveArgs.path,
+                external: true
+              };
+            }
+            const isCssUrlToken = resolveArgs.kind === "url-token";
+            if (isCssUrlToken) {
+              if (!warnedMissingAssets.has(resolveArgs.path)) {
+                warnedMissingAssets.add(resolveArgs.path);
+                console.warn(
+                  brand(
+                    `\u26A0\uFE0F Missing CSS asset: ${resolveArgs.path}
+  Looked in:
+  - ${fromSrc}
+  - ${fromPublic}`
+                  )
+                );
+              }
+              return {
+                path: resolveArgs.path,
+                external: true
+              };
+            }
+            return {
+              path: fromSrc
+            };
+          });
+        }
+      }
+    ]
+  });
+  for (const file of result.outputFiles) {
+    const rel = normalizeSlashes(path7.relative(distDir, file.path));
+    out.set(rel, file.text ?? file.contents);
+  }
+  return out;
+}
+
+// src/html-asset-validator.ts
+function isRelativeUrl(url) {
+  return !/^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(url);
+}
+var SITE_ORIGIN = "http://html-pages.invalid";
+var SITE_ROOT = new URL(`${SITE_ORIGIN}/`);
+function siteRootUrl(base = "/") {
+  if (!base || base.startsWith(".")) return SITE_ROOT;
+  try {
+    return new URL(base.endsWith("/") ? base : `${base}/`, SITE_ROOT);
+  } catch {
+    return SITE_ROOT;
+  }
+}
+function documentBaseUrl(html, pageFileName, siteRoot) {
+  const page = new URL(pageFileName.replace(/^\/+/, ""), siteRoot);
+  const base = stripCodeSampleMarkup(html).match(
+    /<base\b[^>]*\bhref=["']([^"']+)["']/i
+  );
+  if (!base) return page;
+  try {
+    return new URL(base[1], page);
+  } catch {
+    return page;
+  }
+}
+function resolveLocalPath(url, documentBase, siteRoot) {
+  if (url.startsWith("#") || url.startsWith("?")) return null;
+  let resolved;
+  try {
+    resolved = new URL(url, documentBase);
+  } catch {
+    return null;
+  }
+  if (resolved.origin !== siteRoot.origin) return null;
+  const pathname = resolved.pathname.startsWith(siteRoot.pathname) ? resolved.pathname.slice(siteRoot.pathname.length - 1) : resolved.pathname;
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    return pathname;
+  }
+}
+function replaceExtension(url, from, to) {
+  const suffixIndex = url.search(/[?#]/);
+  const pathPart = suffixIndex === -1 ? url : url.slice(0, suffixIndex);
+  const suffix = suffixIndex === -1 ? "" : url.slice(suffixIndex);
+  if (!pathPart.endsWith(from)) return url;
+  return pathPart.slice(0, -from.length) + to + suffix;
+}
+function matchesExternalAsset(urlPath, patterns) {
   return patterns.some(
-    (pattern) => pattern.endsWith("/") ? clean.startsWith(pattern) : clean === pattern
+    (pattern) => pattern.endsWith("/") ? urlPath.startsWith(pattern) : urlPath === pattern
   );
 }
 function normalizeExternalAssets(value) {
   const list = value == null ? [] : Array.isArray(value) ? value : [value];
   return list.filter(Boolean).map((entry) => entry.startsWith("/") ? entry : `/${entry}`);
 }
-function fileExistsForPublicUrl(root, pagesDir, url) {
-  const clean = stripQueryAndHash(url).slice(1);
-  const fromSrc = path7.join(root, pagesDir, clean);
-  if (fs4.existsSync(fromSrc)) return true;
-  const fromPublic = path7.join(root, "public", clean);
-  if (fs4.existsSync(fromPublic)) return true;
+function fileExistsForPublicPath(root, pagesDir, urlPath) {
+  const clean = urlPath.slice(1);
+  const fromSrc = path8.join(root, pagesDir, clean);
+  if (fs5.existsSync(fromSrc)) return true;
+  const fromPublic = path8.join(root, "public", clean);
+  if (fs5.existsSync(fromPublic)) return true;
   return false;
+}
+function isUnshippedCommonJs(root, pagesDir, urlPath) {
+  if (!COMMONJS_EXTENSIONS.includes(path8.posix.extname(urlPath))) return false;
+  const clean = urlPath.slice(1);
+  return fs5.existsSync(path8.join(root, pagesDir, clean)) && !fs5.existsSync(path8.join(root, "public", clean));
 }
 function collectScriptSrcs(html) {
   const out = [];
@@ -1577,8 +1807,18 @@ function collectStylesheetHrefs(html) {
   }
   return out;
 }
+var CODE_SAMPLE_RE = /<(pre|code)\b[^>]*>[\s\S]*?<\/\1>/gi;
 function stripCodeSampleMarkup(html) {
-  return html.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, "").replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, "");
+  return html.replace(CODE_SAMPLE_RE, "");
+}
+function mapOutsideCodeSamples(html, map) {
+  let out = "";
+  let last = 0;
+  for (const match of html.matchAll(CODE_SAMPLE_RE)) {
+    out += map(html.slice(last, match.index)) + match[0];
+    last = match.index + match[0].length;
+  }
+  return out + map(html.slice(last));
 }
 function collectLiteralDynamicImports(html) {
   const out = [];
@@ -1600,35 +1840,96 @@ function collectHrefSrcUrls(html) {
   }
   return out;
 }
-function collectLocalAssetUrls(html, base = "/") {
+function collectLocalAssetUrls(html, pageFileName = "index.html", base = "/") {
+  const siteRoot = siteRootUrl(base);
+  const documentBase = documentBaseUrl(html, pageFileName, siteRoot);
   const candidates = [
     ...collectHrefSrcUrls(html),
     ...collectLiteralDynamicImports(html)
   ];
   return unique(
-    candidates.map((url) => stripBase(url, base)).filter(isLocalRootUrl).map(stripQueryAndHash)
+    candidates.map((url) => resolveLocalPath(url, documentBase, siteRoot)).filter((urlPath) => urlPath !== null)
+  );
+}
+function rewriteCompiledAssetUrls(html, pageFileName, outputPaths, base = "/") {
+  if (outputPaths.size === 0) return html;
+  const siteRoot = siteRootUrl(base);
+  const documentBase = documentBaseUrl(html, pageFileName, siteRoot);
+  const rewrite = (url) => {
+    const source = resolveLocalPath(url, documentBase, siteRoot);
+    const output = source && outputPaths.get(source);
+    if (!source || !output) return url;
+    return replaceExtension(
+      url,
+      path8.posix.extname(source),
+      path8.posix.extname(output)
+    );
+  };
+  return mapOutsideCodeSamples(
+    html,
+    (chunk) => chunk.replace(
+      /\b(href|src)=(["'])([^"']+)\2/gi,
+      (_, attr, quote, url) => `${attr}=${quote}${rewrite(url)}${quote}`
+    ).replace(
+      /(import\s*\(\s*["'])([^"'`]+)(["']\s*\))/gi,
+      (_, open, url, close) => `${open}${rewrite(url)}${close}`
+    )
   );
 }
 function formatPageLabel(pageLabel) {
   return pageLabel ? ` (${pageLabel})` : "";
 }
-function missingAssetMessage(args) {
-  const { pluginName, kind, url, sitePath, base, root, pagesDir, pageLabel } = args;
-  const clean = stripQueryAndHash(sitePath).slice(1);
-  const pageSuffix = formatPageLabel(pageLabel);
-  const message = `[${pluginName}] Missing ${kind}${pageSuffix}: ${url}
-Expected one of:
-- ${path7.join(root, pagesDir, clean)}
-- ${path7.join(root, "public", clean)}`;
-  const once = stripBase(sitePath, base);
-  if (once === sitePath || !fileExistsForPublicUrl(root, pagesDir, once)) {
-    return message;
+function suggestAlternative(args) {
+  const { url, resolved, siteRoot, root, pagesDir } = args;
+  const basePath = siteRoot.pathname;
+  if (basePath !== "/" && resolved.startsWith(basePath)) {
+    const once = resolved.slice(basePath.length - 1);
+    if (fileExistsForPublicPath(root, pagesDir, once)) {
+      return `It has Vite's base (${basePath}) twice: page HTML is written for the site root, and the base is added to asset URLs for you, in dev and build alike. Write "${once}".`;
+    }
   }
-  return `${message}
-It has Vite's base (${base}) twice: page HTML is written for the site root, and the base is added to asset URLs for you, in dev and build alike. Write "${once}".`;
+  if (isRelativeUrl(url)) {
+    const fromRoot = resolveLocalPath(url, SITE_ROOT, SITE_ROOT);
+    if (fromRoot && fileExistsForPublicPath(root, pagesDir, fromRoot)) {
+      return `Did you mean "${fromRoot}"? A relative URL resolves against the page's own location, so it changes from page to page.`;
+    }
+  }
+  if (resolved.endsWith(".js")) {
+    for (const ext of COMPILED_TO_JS_EXTENSIONS) {
+      const source = path8.join(pagesDir, resolved.slice(1, -3) + ext);
+      if (fs5.existsSync(path8.join(root, source))) {
+        return `Did you mean "${replaceExtension(url, ".js", ext)}"? Reference ${source} by its source name: the dev server serves it as is, and the build points the page at the .js it compiles to.`;
+      }
+    }
+  }
+  return null;
 }
-function reportMissing(mode, asset) {
-  const message = missingAssetMessage(asset);
+function missingAssetMessage(args) {
+  const { pluginName, kind, url, resolved, from, siteRoot, root, pagesDir, pageLabel } = args;
+  const clean = resolved.slice(1);
+  const lines = [`[${pluginName}] Missing ${kind}${formatPageLabel(pageLabel)}: ${url}`];
+  if (isRelativeUrl(url)) {
+    lines.push(`Resolves to ${resolved} from ${from}`);
+  }
+  lines.push(
+    `Expected one of:`,
+    `- ${path8.join(root, pagesDir, clean)}`,
+    `- ${path8.join(root, "public", clean)}`
+  );
+  const alternative = suggestAlternative({ url, resolved, siteRoot, root, pagesDir });
+  if (alternative) lines.push(alternative);
+  return lines.join("\n");
+}
+function commonJsMessage(args) {
+  const { pluginName, kind, url, resolved, pagesDir, pageLabel } = args;
+  const source = path8.posix.join(pagesDir, resolved.slice(1));
+  return [
+    `[${pluginName}] Missing ${kind}${formatPageLabel(pageLabel)}: ${url}`,
+    `${source} is CommonJS, which browsers can't load, so the build never emits it.`,
+    `Write it as an ES module (.js, .mjs, .ts, .mts), or put a file meant to ship as is in public/.`
+  ].join("\n");
+}
+function reportMissing(mode, message) {
   if (mode === "warn") {
     console.warn(`\u26A0\uFE0F ${message}`);
     return;
@@ -1642,40 +1943,54 @@ function validateHtmlAssetReferences(options) {
     html,
     pluginName,
     pageLabel,
+    pageFileName = "index.html",
     missingAssets = "error",
     externalAssets,
     base = "/"
   } = options;
   const external = normalizeExternalAssets(externalAssets);
-  const checkable = (urls) => unique(urls).map((url) => ({ url, sitePath: stripBase(url, base) })).filter(
-    ({ sitePath }) => isLocalRootUrl(sitePath) && !matchesExternalAsset(sitePath, external)
-  );
-  const describe = (kind, url, sitePath) => ({
-    pluginName,
-    kind,
-    url,
-    sitePath,
-    base,
-    root,
-    pagesDir,
-    pageLabel
-  });
-  for (const { url, sitePath } of checkable(collectScriptSrcs(html))) {
-    if (!fileExistsForPublicUrl(root, pagesDir, sitePath)) {
-      reportMissing(missingAssets, describe("JavaScript asset", url, sitePath));
-    }
-  }
-  for (const { url, sitePath } of checkable(collectStylesheetHrefs(html))) {
-    if (!fileExistsForPublicUrl(root, pagesDir, sitePath)) {
-      reportMissing(missingAssets, describe("stylesheet asset", url, sitePath));
-    }
-  }
-  for (const { url, sitePath } of checkable(collectLiteralDynamicImports(html))) {
-    if (!fileExistsForPublicUrl(root, pagesDir, sitePath)) {
-      console.warn(
-        `\u26A0\uFE0F ${missingAssetMessage(describe("literal dynamic import", url, sitePath))}`
+  const siteRoot = siteRootUrl(base);
+  const documentBase = documentBaseUrl(html, pageFileName, siteRoot);
+  const from = resolveLocalPath(documentBase.href, documentBase, siteRoot) ?? "/";
+  const findMissing = (urls, kind) => {
+    const messages = [];
+    for (const url of unique(urls)) {
+      const resolved = resolveLocalPath(url, documentBase, siteRoot);
+      if (resolved === null || matchesExternalAsset(resolved, external)) continue;
+      if (isUnshippedCommonJs(root, pagesDir, resolved)) {
+        messages.push(
+          commonJsMessage({ pluginName, kind, url, resolved, pagesDir, pageLabel })
+        );
+        continue;
+      }
+      if (fileExistsForPublicPath(root, pagesDir, resolved)) continue;
+      messages.push(
+        missingAssetMessage({
+          pluginName,
+          kind,
+          url,
+          resolved,
+          from,
+          siteRoot,
+          root,
+          pagesDir,
+          pageLabel
+        })
       );
     }
+    return messages;
+  };
+  for (const message of findMissing(collectScriptSrcs(html), "JavaScript asset")) {
+    reportMissing(missingAssets, message);
+  }
+  for (const message of findMissing(collectStylesheetHrefs(html), "stylesheet asset")) {
+    reportMissing(missingAssets, message);
+  }
+  for (const message of findMissing(
+    collectLiteralDynamicImports(html),
+    "literal dynamic import"
+  )) {
+    console.warn(`\u26A0\uFE0F ${message}`);
   }
 }
 
@@ -1734,149 +2049,6 @@ async function buildPageIndex(args) {
     seenRoutes.set(page.routePath, page);
   }
   return pages;
-}
-
-// src/static-assets.ts
-import fs5 from "fs/promises";
-import path8 from "path";
-import fg from "fast-glob";
-import * as esbuild from "esbuild";
-import fsSync from "fs";
-function normalizeSlashes(value) {
-  return value.replace(/\\/g, "/");
-}
-function hasAnySuffix(value, suffixes) {
-  return suffixes.some((suffix) => value.endsWith(suffix));
-}
-function shouldIgnoreFile(rel) {
-  return rel.endsWith(".d.ts") || rel.endsWith(".map") || rel.endsWith(".tsbuildinfo") || rel.startsWith(".") || rel.includes("/.");
-}
-function isProcessableAsset(rel) {
-  return rel.endsWith(".js") || rel.endsWith(".mjs") || rel.endsWith(".ts") || rel.endsWith(".css");
-}
-function toOutputFileName(relativePathFromSrc) {
-  if (relativePathFromSrc.endsWith(".ts")) {
-    return relativePathFromSrc.slice(0, -3) + ".js";
-  }
-  return relativePathFromSrc;
-}
-async function collectStaticAssets(args) {
-  const { root, pagesDir, pageExtensions } = args;
-  const srcDir = path8.join(root, pagesDir);
-  const entries = await fg("**/*", {
-    cwd: srcDir,
-    onlyFiles: true,
-    dot: false,
-    absolute: false
-  });
-  const assets = [];
-  for (const entry of entries) {
-    const rel = normalizeSlashes(entry);
-    if (shouldIgnoreFile(rel)) continue;
-    if (hasAnySuffix(rel, pageExtensions)) continue;
-    const absolutePath = path8.join(srcDir, rel);
-    assets.push({
-      absolutePath,
-      relativePathFromSrc: rel,
-      outputFileName: normalizeSlashes(toOutputFileName(rel)),
-      kind: isProcessableAsset(rel) ? "process" : "copy"
-    });
-  }
-  return assets;
-}
-async function copyStaticAssetSource(asset) {
-  return fs5.readFile(asset.absolutePath);
-}
-async function buildProcessedStaticAssets(args) {
-  const { root, pagesDir, assets, minify = true, sourcemap = false } = args;
-  const processable = assets.filter((a) => a.kind === "process");
-  const out = /* @__PURE__ */ new Map();
-  if (processable.length === 0) {
-    return out;
-  }
-  const srcDir = path8.join(root, pagesDir);
-  const distDir = path8.join(root, "dist");
-  const warnedMissingAssets = /* @__PURE__ */ new Set();
-  const result = await esbuild.build({
-    entryPoints: processable.map((a) => a.absolutePath),
-    absWorkingDir: root,
-    outbase: srcDir,
-    outdir: distDir,
-    bundle: true,
-    splitting: true,
-    treeShaking: true,
-    minify,
-    sourcemap,
-    format: "esm",
-    target: "esnext",
-    platform: "browser",
-    write: false,
-    entryNames: "[dir]/[name]",
-    assetNames: "[dir]/[name]",
-    loader: {
-      ".css": "css",
-      ".png": "file",
-      ".jpg": "file",
-      ".jpeg": "file",
-      ".gif": "file",
-      ".svg": "file",
-      ".webp": "file",
-      ".woff": "file",
-      ".woff2": "file",
-      ".ttf": "file",
-      ".otf": "file"
-    },
-    plugins: [
-      {
-        name: "html-pages-root-url-resolver",
-        setup(build2) {
-          build2.onResolve({ filter: /^\// }, (resolveArgs) => {
-            if (path8.isAbsolute(resolveArgs.path) && fsSync.existsSync(resolveArgs.path)) {
-              return { path: resolveArgs.path };
-            }
-            const cleanPath = resolveArgs.path.slice(1);
-            const fromSrc = path8.join(srcDir, cleanPath);
-            if (fsSync.existsSync(fromSrc)) {
-              return { path: fromSrc };
-            }
-            const fromPublic = path8.join(root, "public", cleanPath);
-            if (fsSync.existsSync(fromPublic)) {
-              return {
-                path: resolveArgs.path,
-                external: true
-              };
-            }
-            const isCssUrlToken = resolveArgs.kind === "url-token";
-            if (isCssUrlToken) {
-              if (!warnedMissingAssets.has(resolveArgs.path)) {
-                warnedMissingAssets.add(resolveArgs.path);
-                console.warn(
-                  brand(
-                    `\u26A0\uFE0F Missing CSS asset: ${resolveArgs.path}
-  Looked in:
-  - ${fromSrc}
-  - ${fromPublic}`
-                  )
-                );
-              }
-              return {
-                path: resolveArgs.path,
-                external: true
-              };
-            }
-            return {
-              path: fromSrc
-            };
-          });
-        }
-      }
-    ]
-  });
-  for (const file of result.outputFiles) {
-    const rel = normalizeSlashes(path8.relative(distDir, file.path));
-    out.set(rel, file.text ?? file.contents);
-  }
-  return out;
 }
 
 // src/plugin.ts
@@ -1974,7 +2146,7 @@ function htPages(options = {}) {
   let userConfigFile;
   let resolvedMode = "production";
   let resolvedBase = "/";
-  let additionalAssetSources;
+  let viteConfig;
   let buildPipelinePromise = null;
   const cleanUrls = options.cleanUrls ?? true;
   const pagesDir = options.pagesDir ?? "src";
@@ -2175,7 +2347,7 @@ export {
       userConfigFile = resolved.configFile ?? void 0;
       resolvedMode = resolved.mode;
       resolvedBase = resolved.base || "/";
-      additionalAssetSources = resolved.html?.additionalAssetSources;
+      viteConfig = resolved;
       if (!hasWarnedESM) {
         warnIfNotESM(root);
         hasWarnedESM = true;
@@ -2274,13 +2446,11 @@ export {
         const batchSize = options.renderBatchSize ?? Math.max(options.renderConcurrency ?? 8, 32);
         const renderedPages = [];
         let notFoundSource;
-        const withBase = (source, fileName) => {
-          const base = pageBase(resolvedBase, fileName);
-          return {
-            base,
-            html: applyBaseToHtml(source, base, additionalAssetSources)
-          };
-        };
+        const withBase = (source, fileName) => applyBaseToHtml(
+          source,
+          pageBase(resolvedBase, fileName),
+          viteConfig?.html?.additionalAssetSources
+        );
         for (const batch of chunkArray(pages, batchSize)) {
           await Promise.all(
             batch.map(
@@ -2293,44 +2463,44 @@ export {
                 }
                 const source = await renderPage(page, mod, false);
                 const fileName = options.mapOutputPath?.(page) ?? page.fileName;
-                const { base, html } = withBase(source, fileName);
+                const html = withBase(source, fileName);
                 validateHtmlAssetReferences({
                   root,
                   pagesDir,
                   html,
                   pluginName: PLUGIN_NAME,
                   pageLabel: page.relativePath,
+                  pageFileName: fileName,
                   missingAssets: options.missingAssets ?? "error",
                   externalAssets: options.externalAssets,
-                  base
+                  base: resolvedBase
                 });
                 if (page.routePath === "/404") notFoundSource = source;
-                renderedPages.push({ page, fileName, base, html });
+                renderedPages.push({ page, fileName, html });
               })
             )
           );
         }
-        const notFound = notFoundSource != null ? withBase(notFoundSource, "404.html") : {
-          base: pageBase(resolvedBase, "404.html"),
-          html: defaultNotFoundHtml(resolvedBase)
-        };
-        const notFoundHtml = notFound.html;
+        const notFoundHtml = notFoundSource != null ? withBase(notFoundSource, "404.html") : defaultNotFoundHtml(resolvedBase);
         logDebug(
           options.debug,
           notFoundSource != null ? "generated 404.html from user page" : "generated default 404.html"
         );
         const referencedUrls = /* @__PURE__ */ new Set();
-        for (const { html, base } of [...renderedPages, notFound]) {
-          for (const url of collectLocalAssetUrls(html, base)) {
+        for (const { fileName, html } of renderedPages) {
+          for (const url of collectLocalAssetUrls(html, fileName, resolvedBase)) {
             referencedUrls.add(url);
           }
+        }
+        for (const url of collectLocalAssetUrls(notFoundHtml, "404.html", resolvedBase)) {
+          referencedUrls.add(url);
         }
         const staticAssets = await collectStaticAssets({
           root,
           pagesDir,
           pageExtensions
         });
-        const isReferenced = (asset) => referencedUrls.has(`/${asset.outputFileName}`) || referencedUrls.has(`/${asset.relativePathFromSrc}`);
+        const isReferenced = (asset) => referencedUrls.has(`/${asset.relativePathFromSrc}`);
         const processableAssets = [];
         const skippedAssets = [];
         for (const asset of staticAssets) {
@@ -2362,7 +2532,8 @@ export {
           pagesDir,
           assets: processableAssets,
           minify: true,
-          sourcemap: false
+          sourcemap: false,
+          viteConfig
         });
         for (const [fileName, source] of processedOutputs) {
           this.emitFile({
@@ -2370,6 +2541,15 @@ export {
             fileName,
             source
           });
+        }
+        const compiledOutputPaths = /* @__PURE__ */ new Map();
+        for (const asset of processableAssets) {
+          if (asset.outputFileName !== asset.relativePathFromSrc) {
+            compiledOutputPaths.set(
+              `/${asset.relativePathFromSrc}`,
+              `/${asset.outputFileName}`
+            );
+          }
         }
         for (const asset of staticAssets) {
           if (asset.kind !== "copy") continue;
@@ -2384,13 +2564,23 @@ export {
           this.emitFile({
             type: "asset",
             fileName,
-            source: html
+            source: rewriteCompiledAssetUrls(
+              html,
+              fileName,
+              compiledOutputPaths,
+              resolvedBase
+            )
           });
         }
         this.emitFile({
           type: "asset",
           fileName: "404.html",
-          source: notFoundHtml
+          source: rewriteCompiledAssetUrls(
+            notFoundHtml,
+            "404.html",
+            compiledOutputPaths,
+            resolvedBase
+          )
         });
         const sitemapBase = (options.site ?? "").replace(/\/+$/, "");
         const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(

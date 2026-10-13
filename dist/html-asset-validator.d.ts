@@ -4,22 +4,39 @@ export interface HtmlAssetValidationOptions {
     html: string;
     pluginName: string;
     pageLabel?: string;
+    /**
+     * Where the page is emitted, relative to the output directory
+     * (`blog/hello/index.html`). Relative URLs resolve against it, as they
+     * do in the browser. Defaults to `index.html`.
+     */
+    pageFileName?: string;
     missingAssets?: 'error' | 'warn';
     externalAssets?: string | string[];
     /**
-     * The base the page's URLs were written with — Vite's `base`, or for a
-     * relative base the page's path back to the output root. It comes off
-     * a URL before the URL is looked up on disk or matched against
-     * `externalAssets`, both of which are written for the site root.
-     * Defaults to `/`.
+     * Vite's `base`. The site is served from there, so a URL under it is
+     * one of the site's own files, laid out from the root of `pagesDir`
+     * and `public/`; the base comes off before the file is looked for or
+     * matched against `externalAssets`. Defaults to `/`.
      */
     base?: string;
 }
 /**
- * Collects every root-relative URL the HTML references (any href/src
- * attribute plus literal dynamic imports), with `base` taken off and
- * query/hash stripped. Used to decide which source assets must be
+ * Collects the path of every same-site URL the HTML references (any
+ * href/src attribute plus literal dynamic imports), with query/hash
+ * stripped. Relative URLs are resolved against `pageFileName`, and
+ * Vite's `base` comes off. Used to decide which source assets must be
  * emitted at build time.
  */
-export declare function collectLocalAssetUrls(html: string, base?: string): string[];
+export declare function collectLocalAssetUrls(html: string, pageFileName?: string, base?: string): string[];
+/**
+ * Points references to compiled sources at what the build emitted for
+ * them, so `src="/main.ts"` becomes `src="/main.js"`. `outputPaths` maps
+ * a source path (`/main.ts`) to its output path (`/main.js`).
+ *
+ * Covers the same references `collectLocalAssetUrls` reads, except in
+ * `<pre>`/`<code>` samples, which should go on showing the source name.
+ * Only the extension changes, so a relative URL stays relative and a
+ * query or hash is kept.
+ */
+export declare function rewriteCompiledAssetUrls(html: string, pageFileName: string, outputPaths: Map<string, string>, base?: string): string;
 export declare function validateHtmlAssetReferences(options: HtmlAssetValidationOptions): void;

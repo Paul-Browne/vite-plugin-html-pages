@@ -26,7 +26,10 @@ function isStaticAssetRequest(url: string): boolean {
     url.endsWith('.css') ||
     url.endsWith('.js') ||
     url.endsWith('.mjs') ||
+    url.endsWith('.jsx') ||
     url.endsWith('.ts') ||
+    url.endsWith('.mts') ||
+    url.endsWith('.tsx') ||
     url.endsWith('.png') ||
     url.endsWith('.jpg') ||
     url.endsWith('.jpeg') ||
