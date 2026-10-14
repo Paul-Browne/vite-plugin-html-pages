@@ -19,7 +19,6 @@ export default defineConfig({
   external: [
     'vite',
     'fast-glob',
-    'p-limit',
     'esbuild',
     'react',
     'react/jsx-runtime',

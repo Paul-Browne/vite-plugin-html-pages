@@ -3,11 +3,11 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { transform as esbuildTransform } from 'esbuild';
-import pLimit from 'p-limit';
 import type { Plugin, ResolvedConfig, ViteDevServer } from 'vite';
 
 import { writePageTypeDeclarations } from './typegen.js';
 import { formatDevPageError } from './format-dev-error.js';
+import pLimit from './p-limit.js';
 
 import {
   DEFAULT_PAGE_EXTENSIONS,
