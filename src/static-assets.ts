@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import fg from 'fast-glob';
+import { glob } from 'tinyglobby';
 import * as esbuild from 'esbuild';
 import fsSync from 'node:fs';
 import { transformWithOxc, type ResolvedConfig } from 'vite';
@@ -119,12 +119,15 @@ export async function collectStaticAssets(
   const { root, pagesDir, pageExtensions } = args;
   const srcDir = path.join(root, pagesDir);
 
-  const entries = await fg('**/*', {
-    cwd: srcDir,
-    onlyFiles: true,
-    dot: false,
-    absolute: false,
-  });
+  // Sorted, as the walk order is the filesystem's and this feeds esbuild.
+  const entries = (
+    await glob('**/*', {
+      cwd: srcDir,
+      onlyFiles: true,
+      dot: false,
+      absolute: false,
+    })
+  ).sort();
 
   const assets: StaticAssetFile[] = [];
 

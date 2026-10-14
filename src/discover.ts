@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { glob } from 'tinyglobby';
 import { normalizeFsPath, toPosix } from './path-utils.js';
 import { isDynamicPage, toRoutePattern } from './route-utils.js';
 import { extractRouteParamDefinitions } from './route-params.js';
@@ -20,9 +21,6 @@ export async function discoverEntryPages(
   root: string,
   options: HtPagesPluginOptions,
 ): Promise<HtPageInfo[]> {
-  const fgModule = await import('fast-glob');
-  const fg = (fgModule.default ?? fgModule) as typeof import('fast-glob');
-
   const pagesDir = options.pagesDir ?? 'src';
   const pageExtensions = options.pageExtensions?.length
     ? options.pageExtensions
@@ -42,10 +40,13 @@ export async function discoverEntryPages(
 
   const pagesRoot = normalizeFsPath(path.join(root, pagesDir));
 
-  const files = await fg.glob(include, {
+  const files = await glob(include, {
     cwd: root,
     ignore: exclude,
     absolute: true,
+    // On by default in tinyglobby, which would turn an `include` or
+    // `exclude` naming a directory into "everything inside it".
+    expandDirectories: false,
   });
 
   return files

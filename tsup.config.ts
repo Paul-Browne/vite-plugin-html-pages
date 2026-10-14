@@ -18,7 +18,7 @@ export default defineConfig({
   splitting: false,
   external: [
     'vite',
-    'fast-glob',
+    'tinyglobby',
     'esbuild',
     'react',
     'react/jsx-runtime',

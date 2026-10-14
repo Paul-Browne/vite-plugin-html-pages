@@ -799,6 +799,7 @@ function applyBaseToHtml(html, base, additionalAssetSources) {
 
 // src/discover.ts
 import path4 from "path";
+import { glob } from "tinyglobby";
 
 // src/route-utils.ts
 var DYNAMIC_SEGMENT_RE = /\[([A-Za-z0-9_]+)\]/g;
@@ -1003,17 +1004,18 @@ function buildDefaultIncludeGlobs(pagesDir, pageExtensions) {
   });
 }
 async function discoverEntryPages(root, options) {
-  const fgModule = await import("fast-glob");
-  const fg2 = fgModule.default ?? fgModule;
   const pagesDir = options.pagesDir ?? "src";
   const pageExtensions = options.pageExtensions?.length ? options.pageExtensions : DEFAULT_PAGE_EXTENSIONS;
   const include = Array.isArray(options.include) ? options.include : options.include ? [options.include] : buildDefaultIncludeGlobs(pagesDir, pageExtensions);
   const exclude = Array.isArray(options.exclude) ? options.exclude : options.exclude ? [options.exclude] : [];
   const pagesRoot = normalizeFsPath(path4.join(root, pagesDir));
-  const files = await fg2.glob(include, {
+  const files = await glob(include, {
     cwd: root,
     ignore: exclude,
-    absolute: true
+    absolute: true,
+    // On by default in tinyglobby, which would turn an `include` or
+    // `exclude` naming a directory into "everything inside it".
+    expandDirectories: false
   });
   return files.sort().map((absolutePath) => {
     const entryPath = normalizeFsPath(absolutePath);
@@ -1751,7 +1753,7 @@ import path8 from "path";
 // src/static-assets.ts
 import fs4 from "fs/promises";
 import path7 from "path";
-import fg from "fast-glob";
+import { glob as glob2 } from "tinyglobby";
 import * as esbuild from "esbuild";
 import fsSync from "fs";
 import { transformWithOxc } from "vite";
@@ -1808,12 +1810,12 @@ function viteJsxPlugin(config) {
 async function collectStaticAssets(args) {
   const { root, pagesDir, pageExtensions } = args;
   const srcDir = path7.join(root, pagesDir);
-  const entries = await fg("**/*", {
+  const entries = (await glob2("**/*", {
     cwd: srcDir,
     onlyFiles: true,
     dot: false,
     absolute: false
-  });
+  })).sort();
   const assets = [];
   for (const entry of entries) {
     const rel = normalizeSlashes(entry);
