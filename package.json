@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-html-pages",
-  "version": "2.6.1",
+  "version": "2.6.2",
   "author": "Paul Browne",
   "type": "module",
   "license": "MIT",
@@ -79,8 +79,7 @@
   },
   "dependencies": {
     "esbuild": "^0.28.2",
-    "fast-glob": "^3.3.3",
-    "picocolors": "^1.1.1"
+    "fast-glob": "^3.3.3"
   },
   "engines": {
     "node": ">=18"

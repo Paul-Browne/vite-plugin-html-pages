@@ -271,7 +271,62 @@ async function writePageTypeDeclarations(args) {
 import fs2 from "fs";
 import path3 from "path";
 import { fileURLToPath } from "url";
-import pc from "picocolors";
+
+// src/picocolors.ts
+var { argv, env, platform, stdout } = process;
+var forceColor = env.FORCE_COLOR;
+var isColorSupported = !(env.NO_COLOR || argv.includes("--no-color") || forceColor === "0" || forceColor === "false") && (!!forceColor || argv.includes("--color") || platform === "win32" || !!stdout?.isTTY && env.TERM !== "dumb" || !!env.CI);
+var formatter = (open, close, replace = open) => (input) => open + String(input).split(close).join(replace) + close;
+function createColors(enabled = isColorSupported) {
+  const f = enabled ? formatter : () => String;
+  return {
+    isColorSupported: enabled,
+    reset: f("\x1B[0m", "\x1B[0m"),
+    bold: f("\x1B[1m", "\x1B[22m", "\x1B[22m\x1B[1m"),
+    dim: f("\x1B[2m", "\x1B[22m", "\x1B[22m\x1B[2m"),
+    italic: f("\x1B[3m", "\x1B[23m"),
+    underline: f("\x1B[4m", "\x1B[24m"),
+    inverse: f("\x1B[7m", "\x1B[27m"),
+    hidden: f("\x1B[8m", "\x1B[28m"),
+    strikethrough: f("\x1B[9m", "\x1B[29m"),
+    black: f("\x1B[30m", "\x1B[39m"),
+    red: f("\x1B[31m", "\x1B[39m"),
+    green: f("\x1B[32m", "\x1B[39m"),
+    yellow: f("\x1B[33m", "\x1B[39m"),
+    blue: f("\x1B[34m", "\x1B[39m"),
+    magenta: f("\x1B[35m", "\x1B[39m"),
+    cyan: f("\x1B[36m", "\x1B[39m"),
+    white: f("\x1B[37m", "\x1B[39m"),
+    gray: f("\x1B[90m", "\x1B[39m"),
+    bgBlack: f("\x1B[40m", "\x1B[49m"),
+    bgRed: f("\x1B[41m", "\x1B[49m"),
+    bgGreen: f("\x1B[42m", "\x1B[49m"),
+    bgYellow: f("\x1B[43m", "\x1B[49m"),
+    bgBlue: f("\x1B[44m", "\x1B[49m"),
+    bgMagenta: f("\x1B[45m", "\x1B[49m"),
+    bgCyan: f("\x1B[46m", "\x1B[49m"),
+    bgWhite: f("\x1B[47m", "\x1B[49m"),
+    blackBright: f("\x1B[90m", "\x1B[39m"),
+    redBright: f("\x1B[91m", "\x1B[39m"),
+    greenBright: f("\x1B[92m", "\x1B[39m"),
+    yellowBright: f("\x1B[93m", "\x1B[39m"),
+    blueBright: f("\x1B[94m", "\x1B[39m"),
+    magentaBright: f("\x1B[95m", "\x1B[39m"),
+    cyanBright: f("\x1B[96m", "\x1B[39m"),
+    whiteBright: f("\x1B[97m", "\x1B[39m"),
+    bgBlackBright: f("\x1B[100m", "\x1B[49m"),
+    bgRedBright: f("\x1B[101m", "\x1B[49m"),
+    bgGreenBright: f("\x1B[102m", "\x1B[49m"),
+    bgYellowBright: f("\x1B[103m", "\x1B[49m"),
+    bgBlueBright: f("\x1B[104m", "\x1B[49m"),
+    bgMagentaBright: f("\x1B[105m", "\x1B[49m"),
+    bgCyanBright: f("\x1B[106m", "\x1B[49m"),
+    bgWhiteBright: f("\x1B[107m", "\x1B[49m")
+  };
+}
+var picocolors_default = createColors();
+
+// src/format-dev-error.ts
 function extractSourceLocation(error, root) {
   const stack = error.stack ?? "";
   for (const stackLine of stack.split("\n")) {
@@ -354,15 +409,15 @@ function createSourceFrame(location, contextLines = 3) {
   for (let index = start; index <= end; index++) {
     const number = String(index + 1).padStart(lineNumberWidth, " ");
     const isErrorLine = index === errorIndex;
-    const marker = isErrorLine ? pc.red(">") : " ";
+    const marker = isErrorLine ? picocolors_default.red(">") : " ";
     const line = lines[index];
     output.push(
-      `${marker} ${pc.dim(number)} ${pc.dim("\u2502")} ${line}`
+      `${marker} ${picocolors_default.dim(number)} ${picocolors_default.dim("\u2502")} ${line}`
     );
     if (isErrorLine) {
       const indentation = " ".repeat(Math.max(0, location.column - 1));
       output.push(
-        `  ${" ".repeat(lineNumberWidth)} ${pc.dim("\u2502")} ${indentation}${pc.red("^")}`
+        `  ${" ".repeat(lineNumberWidth)} ${picocolors_default.dim("\u2502")} ${indentation}${picocolors_default.red("^")}`
       );
     }
   }
@@ -382,22 +437,22 @@ function formatDevPageError(args) {
   );
   const output = [
     "",
-    pc.cyan(
+    picocolors_default.cyan(
       `\u2500\u2500 ${heading} ${"\u2500".repeat(separatorLength)}${fileLabel}`
     ),
     "",
-    `${pc.red(error.name + ":")} ${error.message}`
+    `${picocolors_default.red(error.name + ":")} ${error.message}`
   ];
   if (location && sourceFrame) {
     output.push("", path3.relative(root, location.file), "", sourceFrame);
   }
   if (debug && error.stack) {
-    output.push("", pc.dim(error.stack));
+    output.push("", picocolors_default.dim(error.stack));
   }
   output.push(
     "",
-    pc.yellow("Fix the error and save again."),
-    pc.dim("Watching for file changes..."),
+    picocolors_default.yellow("Fix the error and save again."),
+    picocolors_default.dim("Watching for file changes..."),
     ""
   );
   return output.join("\n");
@@ -2407,8 +2462,8 @@ function htPages(options = {}) {
   }
   return {
     name: PLUGIN_NAME,
-    config(userConfig, env) {
-      if (env.command !== "build") return;
+    config(userConfig, env2) {
+      if (env2.command !== "build") return;
       const hasExplicitInput = userConfig.build?.rollupOptions?.input != null;
       if (hasExplicitInput) return;
       return {
@@ -2926,6 +2981,27 @@ export {
   htPages as default,
   fetchWithCache
 };
+/*!
+ * Vendored from picocolors@1.1.1, ported to TypeScript.
+ *
+ * https://github.com/alexeyraspopov/picocolors
+ *
+ * ISC License
+ *
+ * Copyright (c) 2021-2024 Oleksii Raspopov, Kostiantyn Denysov, Anton Verinov
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
 /*!
  * Vendored from p-limit@7.3.3 and its only dependency yocto-queue@1.2.2,
  * ported to TypeScript.
