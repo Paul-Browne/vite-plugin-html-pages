@@ -2687,7 +2687,7 @@ export {
                   root,
                   pagesDir,
                   html,
-                  pluginName: PLUGIN_NAME,
+                  pluginName: getDisplayName(),
                   pageLabel: page.relativePath,
                   pageFileName: fileName,
                   missingAssets: options.missingAssets ?? "error",

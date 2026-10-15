@@ -194,6 +194,17 @@ describe('built pages and the assets they reference', () => {
     expect(readBundled(root, 'island.js')).toContain('runtime:"tiny-jsx"');
   });
 
+  it('names a missing asset under the configured display name', async () => {
+    const root = makeSite({
+      'src/index.ht.js': `export default () =>
+        '<html><head><script src="/js/missing.js"></script></head></html>';`,
+    });
+
+    await expect(
+      buildSite(root, { plugins: [htPages({ displayName: 'sitelo' })] }),
+    ).rejects.toThrow(/\[sitelo\] Missing JavaScript asset \(src\/index\.ht\.js\): \/js\/missing\.js/);
+  });
+
   it('fails when a page loads CommonJS, which the build never emits', async () => {
     const root = makeSite({
       'src/legacy.cjs': 'module.exports = {};\n',
