@@ -330,6 +330,8 @@ Cache modes:
 - **`auto`** (default) — memory in dev, filesystem in production builds
 - **`memory`** — in-process, cleared when the process exits
 - **`fs`** — persisted in `node_modules/.cache/vite-plugin-html-pages/fetch/`
+  (the folder takes the [`displayName`](#plugin-options), so sitelo's is
+  `node_modules/.cache/sitelo/fetch/`)
 - **`none`** — always fetch
 
 Only `GET` requests are cached by default (pass a `cacheKey` to cache
@@ -357,14 +359,39 @@ export default definePageModule({
 ```
 
 Individual helpers (`definePage`, `defineData`, `defineStaticParams`)
-are also exported. At build time this import is transparently swapped
-for a **per-route generated module** whose `PageParams` are inferred
-from the filename: `[slug]` → `{ slug: string }`, `[...path]` →
-`{ path: string[] }`, `[...path]?` → `{ path?: string[] }`.
+are also exported. Imported from `vite-plugin-html-pages/page`, their
+`params` can hold any key: `Record<string, string | string[] | undefined>`.
 
-Matching type declarations are generated into
-`.vite-plugin-html-pages/types/` whenever the dev server or a build
-runs — add that folder to `.gitignore`.
+For params typed from the filename, import the same helpers from the
+page's generated `$types` module. The dev server and every build write
+one per page into `.vite-plugin-html-pages/types/`, laid out like
+`src/` and named for the page's params: `[slug]` → `./$types.slug`
+with `{ slug: string }`, `[...path]` → `./$types.path.all` with
+`{ path: string[] }`, `[...path]?` → `./$types.path.opt` with
+`{ path?: string[] }`, and `./$types` for a page without params. Let
+TypeScript find them with `rootDirs`:
+
+```json
+// tsconfig.json
+{
+  "compilerOptions": {
+    "rootDirs": ["src", ".vite-plugin-html-pages/types"]
+  }
+}
+```
+
+```ts
+// src/blog/[slug].ht.ts
+import { definePageModule } from './$types.slug'
+
+export default definePageModule({
+  generateStaticParams: () => [{ slug: 'hello' }],
+  data: ({ params }) => ({ title: params.slug.toUpperCase() }), // a string
+  render: ({ data }) => `<html><body><h1>${data.title}</h1></body></html>`,
+})
+```
+
+Add `.vite-plugin-html-pages/` to `.gitignore`.
 
 ---
 
@@ -527,7 +554,7 @@ No 404 page? A clean default is generated.
 ### Sitemap
 
 Set your site URL and `dist/sitemap.xml` is generated from all static
-routes, correctly escaped:
+routes but the 404 page, correctly escaped:
 
 ```js
 htmlPages({ site: 'https://example.com' })
@@ -576,7 +603,7 @@ htmlPages({
 | `externalAssets` | `[]` | Root-relative URL(s) another plugin serves; skipped by the missing-asset check |
 | `mapOutputPath` | — | `(page) => string` to customize output filenames |
 | `generatedTypesDir` | `'.vite-plugin-html-pages/types'` | Where generated page helper `.d.ts` files are written |
-| `displayName` | `'vite-plugin-html-pages'` | Label used in console / overlay messages (e.g. `[sitelo]`) |
+| `displayName` | `'vite-plugin-html-pages'` | Label used in console / overlay messages (e.g. `[sitelo]`), and the name of the `fetchWithCache` cache folder |
 | `renderConcurrency` | `8` | Pages rendered in parallel |
 | `renderBatchSize` | `max(concurrency, 32)` | Pages per render batch |
 | `debug` | `false` | Verbose logging of discovery, routing, and emission |

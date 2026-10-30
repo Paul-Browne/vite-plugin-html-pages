@@ -12,13 +12,18 @@ import {
 import {
   PLUGIN_NAME,
   VIRTUAL_PAGE_HELPER_ID,
-  RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX,
+  RESOLVED_VIRTUAL_PAGE_HELPER_ID,
   VIRTUAL_LOCAL_TYPES_PREFIX,
 } from './constants.js';
 import { brand } from './brand.js';
-import { generateTypedPageHelper } from './page-helper-generator.js';
+import { PAGE_HELPER_MODULE_SOURCE } from './page-helper-generator.js';
+import {
+  loadEscapedPage,
+  pageModuleUrl,
+  resolveEscapedPageId,
+} from './page-module-id.js';
 import { isStructuredPageModule } from './render-runtime.js';
-import type { HtPageInfo, HtPageModule } from './types.js';
+import type { HtPageModule } from './types.js';
 
 export type PageModuleLoader = (
   entryPath: string,
@@ -130,25 +135,26 @@ async function loadUserConfig(args: {
   };
 }
 
-function createPageHelperPlugin(
-  getPages: () => Promise<HtPageInfo[]>,
-): Plugin {
+function createPageHelperPlugin(): Plugin {
   return {
     name: `${PLUGIN_NAME}:page-helper`,
 
     resolveId(id, importer) {
-      if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
-        return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
+      if (id === VIRTUAL_PAGE_HELPER_ID) {
+        return RESOLVED_VIRTUAL_PAGE_HELPER_ID;
       }
 
       if (importer && isLocalPageTypesImport(id)) {
         return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
       }
 
-      return null;
+      return resolveEscapedPageId(id);
     },
 
-    async load(id) {
+    load(id) {
+      const escapedPage = loadEscapedPage(id);
+      if (escapedPage) return escapedPage;
+
       if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {
         return `
 export {
@@ -160,21 +166,11 @@ export {
 `;
       }
 
-      if (!id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
-        return null;
+      if (id === RESOLVED_VIRTUAL_PAGE_HELPER_ID) {
+        return PAGE_HELPER_MODULE_SOURCE;
       }
 
-      const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
-
-      const pages = await getPages();
-      const normalizedImporter = path.resolve(importer);
-
-      const page = pages.find(
-        (candidate) =>
-          path.resolve(candidate.absolutePath) === normalizedImporter,
-      );
-
-      return generateTypedPageHelper(page);
+      return null;
     },
   };
 }
@@ -183,13 +179,12 @@ export async function createPageModuleLoader(args: {
   mode: 'dev' | 'build';
   root: string;
   server?: ViteDevServer | null;
-  getPages?: () => Promise<HtPageInfo[]>;
   configFile?: string;
   configMode?: string;
   /** The build's resolved `base`, which a `--base` flag never puts in the config file. */
   base?: string;
 }): Promise<PageModuleLoaderHandle> {
-  const { mode, root, server, getPages } = args;
+  const { mode, root, server } = args;
 
   if (mode === 'dev') {
     if (!server) {
@@ -197,14 +192,10 @@ export async function createPageModuleLoader(args: {
     }
 
     return {
-      loadModule: async (_entryPath, relativePath) =>
-        importPageModule(server, `/${relativePath}`),
+      loadModule: async (entryPath, relativePath) =>
+        importPageModule(server, pageModuleUrl(entryPath, relativePath)),
       close: async () => {},
     };
-  }
-
-  if (!getPages) {
-    throw new Error(brand('getPages is required in build mode'));
   }
 
   const configMode = args.configMode ?? 'production';
@@ -240,17 +231,19 @@ export async function createPageModuleLoader(args: {
       middlewareMode: true,
       watch: null,
     },
-    plugins: [...userPlugins, createPageHelperPlugin(getPages)],
+    plugins: [...userPlugins, createPageHelperPlugin()],
   };
 
   const buildServer = await createServer(config);
 
   return {
     loadModule: async (entryPath) => {
-      const relativePath =
-        '/' + path.relative(root, entryPath).replace(/\\/g, '/');
+      const relativePath = path.relative(root, entryPath).replace(/\\/g, '/');
 
-      return importPageModule(buildServer, relativePath);
+      return importPageModule(
+        buildServer,
+        pageModuleUrl(entryPath, relativePath),
+      );
     },
     close: async () => {
       await buildServer.close();
