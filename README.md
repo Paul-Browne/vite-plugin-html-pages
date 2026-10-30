@@ -330,6 +330,8 @@ Cache modes:
 - **`auto`** (default) — memory in dev, filesystem in production builds
 - **`memory`** — in-process, cleared when the process exits
 - **`fs`** — persisted in `node_modules/.cache/vite-plugin-html-pages/fetch/`
+  (the folder takes the [`displayName`](#plugin-options), so sitelo's is
+  `node_modules/.cache/sitelo/fetch/`)
 - **`none`** — always fetch
 
 Only `GET` requests are cached by default (pass a `cacheKey` to cache
@@ -576,7 +578,7 @@ htmlPages({
 | `externalAssets` | `[]` | Root-relative URL(s) another plugin serves; skipped by the missing-asset check |
 | `mapOutputPath` | — | `(page) => string` to customize output filenames |
 | `generatedTypesDir` | `'.vite-plugin-html-pages/types'` | Where generated page helper `.d.ts` files are written |
-| `displayName` | `'vite-plugin-html-pages'` | Label used in console / overlay messages (e.g. `[sitelo]`) |
+| `displayName` | `'vite-plugin-html-pages'` | Label used in console / overlay messages (e.g. `[sitelo]`), and the name of the `fetchWithCache` cache folder |
 | `renderConcurrency` | `8` | Pages rendered in parallel |
 | `renderBatchSize` | `max(concurrency, 32)` | Pages per render batch |
 | `debug` | `false` | Verbose logging of discovery, routing, and emission |

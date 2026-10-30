@@ -626,7 +626,7 @@ var PLUGIN_NAME = "vite-plugin-html-pages";
 var VIRTUAL_BUILD_ENTRY_ID = `\0${PLUGIN_NAME}:build-entry`;
 var VIRTUAL_PAGE_HELPER_ID = `${PLUGIN_NAME}/page`;
 var RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX = `\0${PLUGIN_NAME}/page:`;
-var CACHE_DIR_NAME = `node_modules/.cache/${PLUGIN_NAME}`;
+var CACHE_ROOT = "node_modules/.cache";
 var DEFAULT_PAGE_EXTENSIONS = [
   ".ht.js",
   ".html.js",
@@ -2936,10 +2936,16 @@ function toSafeFileKey(cacheKey) {
   }
   return createHash("sha256").update(cacheKey).digest("hex");
 }
+var SAFE_DIR_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+function getCacheDirName() {
+  const name = getDisplayName();
+  return SAFE_DIR_NAME_RE.test(name) ? name : PLUGIN_NAME;
+}
 function getCacheFilePath(cacheKey) {
   return path10.join(
     process.cwd(),
-    CACHE_DIR_NAME,
+    CACHE_ROOT,
+    getCacheDirName(),
     "fetch",
     `${toSafeFileKey(cacheKey)}.json`
   );

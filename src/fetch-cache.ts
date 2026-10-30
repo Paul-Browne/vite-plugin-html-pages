@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { CACHE_DIR_NAME } from './constants.js';
+import { getDisplayName } from './brand.js';
+import { CACHE_ROOT, PLUGIN_NAME } from './constants.js';
 
 export type FetchCacheMode = 'auto' | 'memory' | 'fs' | 'none';
 export interface FetchWithCacheOptions {
@@ -48,10 +49,24 @@ function toSafeFileKey(cacheKey: string): string {
   return createHash('sha256').update(cacheKey).digest('hex');
 }
 
+const SAFE_DIR_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * The cache is named for the display name, so sitelo's lives in
+ * `node_modules/.cache/sitelo/`. A display name that is no plain
+ * folder name falls back to the plugin's own.
+ */
+function getCacheDirName(): string {
+  const name = getDisplayName();
+
+  return SAFE_DIR_NAME_RE.test(name) ? name : PLUGIN_NAME;
+}
+
 function getCacheFilePath(cacheKey: string): string {
   return path.join(
     process.cwd(),
-    CACHE_DIR_NAME,
+    CACHE_ROOT,
+    getCacheDirName(),
     'fetch',
     `${toSafeFileKey(cacheKey)}.json`,
   );
