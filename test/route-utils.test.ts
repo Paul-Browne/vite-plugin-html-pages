@@ -161,6 +161,11 @@ describe('fileNameFromRoute', () => {
   it('uses flat files without cleanUrls', () => {
     expect(fileNameFromRoute('/about', false)).toBe('about.html');
   });
+
+  it('puts the 404 page at 404.html either way', () => {
+    expect(fileNameFromRoute('/404', true)).toBe('404.html');
+    expect(fileNameFromRoute('/404', false)).toBe('404.html');
+  });
 });
 
 describe('routeMatch', () => {

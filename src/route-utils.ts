@@ -113,6 +113,10 @@ export function fillParams(
   return normalizeRoutePath(result || '/');
 }
 
+/** `src/404.ht.js`, which hosts serve for any URL that has no page. */
+export const NOT_FOUND_ROUTE = '/404';
+export const NOT_FOUND_FILE = '404.html';
+
 export function fileNameFromRoute(
   routePath: string,
   cleanUrls: boolean,
@@ -120,6 +124,8 @@ export function fileNameFromRoute(
   const normalized = normalizeRoutePath(routePath);
 
   if (normalized === '/') return 'index.html';
+  // Hosts look for it at 404.html whatever the URL style.
+  if (normalized === NOT_FOUND_ROUTE) return NOT_FOUND_FILE;
 
   const base = normalized.slice(1);
   return cleanUrls ? `${base}/index.html` : `${base}.html`;

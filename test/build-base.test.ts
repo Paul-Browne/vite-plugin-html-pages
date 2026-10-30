@@ -129,7 +129,6 @@ describe('build under a base', () => {
     );
 
     expect(site.read('blog/post/index.html')).toContain('href="/repo/site.css"');
-    expect(site.read('404/index.html')).toContain('href="/repo/site.css"');
     expect(site.read('404.html')).toContain('href="/repo/site.css"');
   }, 30_000);
 

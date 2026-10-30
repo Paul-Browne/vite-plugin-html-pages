@@ -868,9 +868,12 @@ function fillParams(pattern, params) {
   });
   return normalizeRoutePath(result || "/");
 }
+var NOT_FOUND_ROUTE = "/404";
+var NOT_FOUND_FILE = "404.html";
 function fileNameFromRoute(routePath, cleanUrls) {
   const normalized = normalizeRoutePath(routePath);
   if (normalized === "/") return "index.html";
+  if (normalized === NOT_FOUND_ROUTE) return NOT_FOUND_FILE;
   const base = normalized.slice(1);
   return cleanUrls ? `${base}/index.html` : `${base}.html`;
 }
@@ -2711,7 +2714,7 @@ export {
         const limit = pLimit(options.renderConcurrency ?? 8);
         const batchSize = options.renderBatchSize ?? Math.max(options.renderConcurrency ?? 8, 32);
         const renderedPages = [];
-        let notFoundSource;
+        let hasNotFoundPage = false;
         const withBase = (source, fileName) => applyBaseToHtml(
           source,
           pageBase(resolvedBase, fileName),
@@ -2728,7 +2731,8 @@ export {
                   );
                 }
                 const source = await renderPage(page, mod, false);
-                const fileName = options.mapOutputPath?.(page) ?? page.fileName;
+                const isNotFound = page.routePath === NOT_FOUND_ROUTE;
+                const fileName = isNotFound ? NOT_FOUND_FILE : options.mapOutputPath?.(page) ?? page.fileName;
                 const html = withBase(source, fileName);
                 validateHtmlAssetReferences({
                   root,
@@ -2741,25 +2745,27 @@ export {
                   externalAssets: options.externalAssets,
                   base: resolvedBase
                 });
-                if (page.routePath === "/404") notFoundSource = source;
-                renderedPages.push({ page, fileName, html });
+                if (isNotFound) hasNotFoundPage = true;
+                renderedPages.push({ fileName, html });
               })
             )
           );
         }
-        const notFoundHtml = notFoundSource != null ? withBase(notFoundSource, "404.html") : defaultNotFoundHtml(resolvedBase);
+        if (!hasNotFoundPage) {
+          renderedPages.push({
+            fileName: NOT_FOUND_FILE,
+            html: defaultNotFoundHtml(resolvedBase)
+          });
+        }
         logDebug(
           options.debug,
-          notFoundSource != null ? "generated 404.html from user page" : "generated default 404.html"
+          hasNotFoundPage ? "generated 404.html from user page" : "generated default 404.html"
         );
         const referencedUrls = /* @__PURE__ */ new Set();
         for (const { fileName, html } of renderedPages) {
           for (const url of collectLocalAssetUrls(html, fileName, resolvedBase)) {
             referencedUrls.add(url);
           }
-        }
-        for (const url of collectLocalAssetUrls(notFoundHtml, "404.html", resolvedBase)) {
-          referencedUrls.add(url);
         }
         const staticAssets = await collectStaticAssets({
           root,
@@ -2838,18 +2844,11 @@ export {
             )
           });
         }
-        this.emitFile({
-          type: "asset",
-          fileName: "404.html",
-          source: rewriteCompiledAssetUrls(
-            notFoundHtml,
-            "404.html",
-            compiledOutputPaths,
-            resolvedBase
-          )
-        });
+        const listedPages = pages.filter(
+          (page) => page.routePath !== NOT_FOUND_ROUTE
+        );
         const sitemapBase = (options.site ?? "").replace(/\/+$/, "");
-        const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(
+        const sitemapRoutes = [...new Set(listedPages.map((p) => p.routePath))].filter(
           (route) => !route.includes(":") && !route.includes("*")
         );
         if (sitemapBase && sitemapRoutes.length > 0) {
@@ -2871,7 +2870,7 @@ ${sitemapRoutes.map(
         if (rss?.site) {
           const routePrefix = rss.routePrefix ?? "/blog";
           const rssSite = rss.site.replace(/\/+$/, "");
-          const rssItems = pages.filter((page) => page.routePath.startsWith(routePrefix)).map((page) => {
+          const rssItems = listedPages.filter((page) => page.routePath.startsWith(routePrefix)).map((page) => {
             const url = escapeXml(`${rssSite}${page.routePath}`);
             return `  <item>
     <title>${escapeXml(page.routePath)}</title>

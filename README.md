@@ -527,7 +527,7 @@ No 404 page? A clean default is generated.
 ### Sitemap
 
 Set your site URL and `dist/sitemap.xml` is generated from all static
-routes, correctly escaped:
+routes but the 404 page, correctly escaped:
 
 ```js
 htmlPages({ site: 'https://example.com' })

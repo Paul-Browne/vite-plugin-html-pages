@@ -42,6 +42,7 @@ import {
   resolveEscapedPageId,
 } from './page-module-id.js';
 import { renderPage } from './render-runtime.js';
+import { NOT_FOUND_FILE, NOT_FOUND_ROUTE } from './route-utils.js';
 import {
   buildProcessedStaticAssets,
   collectStaticAssets,
@@ -594,12 +595,8 @@ export {
 
         // Render every page up front so asset emission can be limited to
         // files the generated HTML actually references.
-        const renderedPages: Array<{
-          page: HtPageInfo;
-          fileName: string;
-          html: string;
-        }> = [];
-        let notFoundSource: string | undefined;
+        const renderedPages: Array<{ fileName: string; html: string }> = [];
+        let hasNotFoundPage = false;
 
         /*
          * Pages are written for the site root; the base goes on here,
@@ -626,7 +623,12 @@ export {
                 }
 
                 const source = await renderPage(page, mod, false);
-                const fileName = options.mapOutputPath?.(page) ?? page.fileName;
+                // Hosts look for the not-found page at 404.html, so it
+                // goes there whatever the output mapping says.
+                const isNotFound = page.routePath === NOT_FOUND_ROUTE;
+                const fileName = isNotFound
+                  ? NOT_FOUND_FILE
+                  : options.mapOutputPath?.(page) ?? page.fileName;
                 const html = withBase(source, fileName);
 
                 // What ships is what gets checked, base and all.
@@ -642,22 +644,24 @@ export {
                   base: resolvedBase,
                 });
 
-                if (page.routePath === '/404') notFoundSource = source;
+                if (isNotFound) hasNotFoundPage = true;
 
-                renderedPages.push({ page, fileName, html });
+                renderedPages.push({ fileName, html });
               }),
             ),
           );
         }
 
-        const notFoundHtml =
-          notFoundSource != null
-            ? withBase(notFoundSource, '404.html')
-            : defaultNotFoundHtml(resolvedBase);
+        if (!hasNotFoundPage) {
+          renderedPages.push({
+            fileName: NOT_FOUND_FILE,
+            html: defaultNotFoundHtml(resolvedBase),
+          });
+        }
 
         logDebug(
           options.debug,
-          notFoundSource != null
+          hasNotFoundPage
             ? 'generated 404.html from user page'
             : 'generated default 404.html',
         );
@@ -672,10 +676,6 @@ export {
           for (const url of collectLocalAssetUrls(html, fileName, resolvedBase)) {
             referencedUrls.add(url);
           }
-        }
-
-        for (const url of collectLocalAssetUrls(notFoundHtml, '404.html', resolvedBase)) {
-          referencedUrls.add(url);
         }
 
         const staticAssets = await collectStaticAssets({
@@ -776,20 +776,14 @@ export {
           });
         }
 
-        this.emitFile({
-          type: 'asset',
-          fileName: '404.html',
-          source: rewriteCompiledAssetUrls(
-            notFoundHtml,
-            '404.html',
-            compiledOutputPaths,
-            resolvedBase,
-          ),
-        });
+        // The not-found page has no URL of its own to list.
+        const listedPages = pages.filter(
+          (page) => page.routePath !== NOT_FOUND_ROUTE,
+        );
 
         const sitemapBase = (options.site ?? '').replace(/\/+$/, '');
 
-        const sitemapRoutes = [...new Set(pages.map((p) => p.routePath))].filter(
+        const sitemapRoutes = [...new Set(listedPages.map((p) => p.routePath))].filter(
           (route) => !route.includes(':') && !route.includes('*'),
         );
 
@@ -816,7 +810,7 @@ export {
           const routePrefix = rss.routePrefix ?? '/blog';
           const rssSite = rss.site.replace(/\/+$/, '');
 
-          const rssItems = pages
+          const rssItems = listedPages
             .filter((page) => page.routePath.startsWith(routePrefix))
             .map((page) => {
               const url = escapeXml(`${rssSite}${page.routePath}`);
