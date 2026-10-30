@@ -17,6 +17,12 @@ import {
 } from './constants.js';
 import { brand } from './brand.js';
 import { generateTypedPageHelper } from './page-helper-generator.js';
+import {
+  loadEscapedPage,
+  pageFileFromModuleId,
+  pageModuleUrl,
+  resolveEscapedPageId,
+} from './page-module-id.js';
 import { isStructuredPageModule } from './render-runtime.js';
 import type { HtPageInfo, HtPageModule } from './types.js';
 
@@ -145,10 +151,13 @@ function createPageHelperPlugin(
         return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
       }
 
-      return null;
+      return resolveEscapedPageId(id);
     },
 
     async load(id) {
+      const escapedPage = loadEscapedPage(id);
+      if (escapedPage) return escapedPage;
+
       if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {
         return `
 export {
@@ -167,7 +176,9 @@ export {
       const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
 
       const pages = await getPages();
-      const normalizedImporter = path.resolve(importer);
+      const normalizedImporter = path.resolve(
+        pageFileFromModuleId(importer) ?? importer,
+      );
 
       const page = pages.find(
         (candidate) =>
@@ -197,8 +208,8 @@ export async function createPageModuleLoader(args: {
     }
 
     return {
-      loadModule: async (_entryPath, relativePath) =>
-        importPageModule(server, `/${relativePath}`),
+      loadModule: async (entryPath, relativePath) =>
+        importPageModule(server, pageModuleUrl(entryPath, relativePath)),
       close: async () => {},
     };
   }
@@ -247,10 +258,12 @@ export async function createPageModuleLoader(args: {
 
   return {
     loadModule: async (entryPath) => {
-      const relativePath =
-        '/' + path.relative(root, entryPath).replace(/\\/g, '/');
+      const relativePath = path.relative(root, entryPath).replace(/\\/g, '/');
 
-      return importPageModule(buildServer, relativePath);
+      return importPageModule(
+        buildServer,
+        pageModuleUrl(entryPath, relativePath),
+      );
     },
     close: async () => {
       await buildServer.close();

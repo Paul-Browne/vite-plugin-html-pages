@@ -35,6 +35,12 @@ import {
 } from './module-loader.js';
 import { buildPageIndex } from './page-index.js';
 import { generateTypedPageHelper } from './page-helper-generator.js';
+import {
+  escapedPageIdForFile,
+  loadEscapedPage,
+  pageFileFromModuleId,
+  resolveEscapedPageId,
+} from './page-module-id.js';
 import { renderPage } from './render-runtime.js';
 import {
   buildProcessedStaticAssets,
@@ -355,10 +361,13 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
         return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
       }      
 
-      return null;
+      return resolveEscapedPageId(id);
     },
 
     async load(id) {
+      const escapedPage = loadEscapedPage(id);
+      if (escapedPage) return escapedPage;
+
       if (id === VIRTUAL_BUILD_ENTRY_ID) {
         return 'export default {};';
       }
@@ -386,7 +395,9 @@ export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
         // static discovery — no page modules need to be evaluated here.
         const entries = await discoverEntryPages(root, options);
 
-        const normalizedImporter = path.resolve(importer);
+        const normalizedImporter = path.resolve(
+          pageFileFromModuleId(importer) ?? importer,
+        );
 
         const page = entries.find(
           (candidate) =>
@@ -476,6 +487,14 @@ export {
           output: asset.outputFileName,
         })),
       );
+    },
+
+    hotUpdate({ file, modules }) {
+      const escapedId = escapedPageIdForFile(file);
+      if (!escapedId) return;
+
+      const escaped = this.environment.moduleGraph.getModuleById(escapedId);
+      if (escaped) return [...modules, escaped];
     },
 
     configureServer(_server) {
