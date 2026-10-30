@@ -1,5 +1,5 @@
 import { type ViteDevServer } from 'vite';
-import type { HtPageInfo, HtPageModule } from './types.js';
+import type { HtPageModule } from './types.js';
 export type PageModuleLoader = (entryPath: string, relativePath: string) => Promise<HtPageModule>;
 export interface PageModuleLoaderHandle {
     loadModule: PageModuleLoader;
@@ -10,7 +10,6 @@ export declare function createPageModuleLoader(args: {
     mode: 'dev' | 'build';
     root: string;
     server?: ViteDevServer | null;
-    getPages?: () => Promise<HtPageInfo[]>;
     configFile?: string;
     configMode?: string;
     /** The build's resolved `base`, which a `--base` flag never puts in the config file. */

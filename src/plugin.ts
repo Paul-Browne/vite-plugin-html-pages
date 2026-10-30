@@ -14,7 +14,7 @@ import {
   PLUGIN_NAME,
   VIRTUAL_BUILD_ENTRY_ID,
   VIRTUAL_PAGE_HELPER_ID,
-  RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX,
+  RESOLVED_VIRTUAL_PAGE_HELPER_ID,
   VIRTUAL_JSX_RUNTIME_ID,
   VIRTUAL_JSX_DEV_RUNTIME_ID,
   RESOLVED_VIRTUAL_JSX_RUNTIME_ID,
@@ -34,11 +34,10 @@ import {
   isLocalPageTypesImport,
 } from './module-loader.js';
 import { buildPageIndex } from './page-index.js';
-import { generateTypedPageHelper } from './page-helper-generator.js';
+import { PAGE_HELPER_MODULE_SOURCE } from './page-helper-generator.js';
 import {
   escapedPageIdForFile,
   loadEscapedPage,
-  pageFileFromModuleId,
   resolveEscapedPageId,
 } from './page-module-id.js';
 import { renderPage } from './render-runtime.js';
@@ -262,7 +261,6 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
     const loader = await createPageModuleLoader({
       mode: 'build',
       root,
-      getPages: async () => entries,
       configFile: userConfigFile,
       configMode: resolvedMode,
       base: resolvedBase,
@@ -336,8 +334,8 @@ export function htPages(options: HtPagesPluginOptions = {}): Plugin {
         return id;
       }
 
-      if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
-        return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
+      if (id === VIRTUAL_PAGE_HELPER_ID) {
+        return RESOLVED_VIRTUAL_PAGE_HELPER_ID;
       }
 
       if (id === VIRTUAL_JSX_RUNTIME_ID) {
@@ -389,23 +387,8 @@ export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
 `;
       }
 
-      if (id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
-        const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
-
-        // The helper only depends on paramDefinitions, which come from
-        // static discovery — no page modules need to be evaluated here.
-        const entries = await discoverEntryPages(root, options);
-
-        const normalizedImporter = path.resolve(
-          pageFileFromModuleId(importer) ?? importer,
-        );
-
-        const page = entries.find(
-          (candidate) =>
-            path.resolve(candidate.absolutePath) === normalizedImporter,
-        );
-
-        return generateTypedPageHelper(page);
+      if (id === RESOLVED_VIRTUAL_PAGE_HELPER_ID) {
+        return PAGE_HELPER_MODULE_SOURCE;
       }
 
       if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {

@@ -1,7 +1,5 @@
 /** The URL to import a page module by. */
 export declare function pageModuleUrl(entryPath: string, relativePath: string): string;
-/** The page file an escaped page module id stands for, or `null`. */
-export declare function pageFileFromModuleId(id: string): string | null;
 export declare function resolveEscapedPageId(id: string): string | null;
 export declare function loadEscapedPage(id: string): Promise<string> | null;
 /**

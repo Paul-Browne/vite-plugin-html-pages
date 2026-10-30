@@ -1,4 +1,4 @@
-import type { HtPageInfo, RouteParamDefinition } from './types.js';
+import type { RouteParamDefinition } from './types.js';
 
 export function paramsTypeFromDefinitions(
   paramDefinitions: RouteParamDefinition[],
@@ -22,57 +22,26 @@ export function paramsTypeFromDefinitions(
   return `{ ${fields.join('; ')} }`;
 }
 
-export function generateTypedPageHelper(page?: HtPageInfo): string {
-  const paramsType = page
-    ? paramsTypeFromDefinitions(page.paramDefinitions ?? [])
-    : '{}';
-
-  return `
-export type PageParams = ${paramsType};
-
-export type StaticParams = PageParams[];
-
-export type DataContext = {
-  params: PageParams;
-  dev: boolean;
-};
-
-export type RenderContext<TData = unknown> = {
-  params: PageParams;
-  data: TData;
-  dev: boolean;
-};
-
-export type PageContext<TData = unknown> = {
-  params: PageParams;
-  data?: TData;
-  dev: boolean;
-};
-
-export type PageModule<TData = unknown> = {
-  generateStaticParams?: () => StaticParams | Promise<StaticParams>;
-  data?: (ctx: DataContext) => TData | Promise<TData>;
-  render: (ctx: RenderContext<TData>) => any;
-};
-
-export function definePage<T extends (ctx: PageContext) => any>(fn: T): T {
+/**
+ * `vite-plugin-html-pages/page` for a site that can't resolve the package
+ * itself, as when it's a dependency of a dependency under pnpm. Vite loads
+ * this as JavaScript, so it holds no types: per-route params are typed by
+ * the `$types` declarations in typegen.ts.
+ */
+export const PAGE_HELPER_MODULE_SOURCE = `
+export function definePage(fn) {
   return fn;
 }
 
-export function defineData<T extends (ctx: DataContext) => any>(fn: T): T {
+export function defineData(fn) {
   return fn;
 }
 
-export function defineStaticParams<
-  T extends () => StaticParams | Promise<StaticParams>
->(fn: T): T {
+export function defineStaticParams(fn) {
   return fn;
 }
 
-export function definePageModule<TData>(
-  mod: PageModule<TData>,
-): PageModule<TData> {
+export function definePageModule(mod) {
   return mod;
 }
 `;
-}

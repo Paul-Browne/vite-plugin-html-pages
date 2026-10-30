@@ -24,57 +24,23 @@ function paramsTypeFromDefinitions(paramDefinitions) {
   });
   return `{ ${fields.join("; ")} }`;
 }
-function generateTypedPageHelper(page) {
-  const paramsType = page ? paramsTypeFromDefinitions(page.paramDefinitions ?? []) : "{}";
-  return `
-export type PageParams = ${paramsType};
-
-export type StaticParams = PageParams[];
-
-export type DataContext = {
-  params: PageParams;
-  dev: boolean;
-};
-
-export type RenderContext<TData = unknown> = {
-  params: PageParams;
-  data: TData;
-  dev: boolean;
-};
-
-export type PageContext<TData = unknown> = {
-  params: PageParams;
-  data?: TData;
-  dev: boolean;
-};
-
-export type PageModule<TData = unknown> = {
-  generateStaticParams?: () => StaticParams | Promise<StaticParams>;
-  data?: (ctx: DataContext) => TData | Promise<TData>;
-  render: (ctx: RenderContext<TData>) => any;
-};
-
-export function definePage<T extends (ctx: PageContext) => any>(fn: T): T {
+var PAGE_HELPER_MODULE_SOURCE = `
+export function definePage(fn) {
   return fn;
 }
 
-export function defineData<T extends (ctx: DataContext) => any>(fn: T): T {
+export function defineData(fn) {
   return fn;
 }
 
-export function defineStaticParams<
-  T extends () => StaticParams | Promise<StaticParams>
->(fn: T): T {
+export function defineStaticParams(fn) {
   return fn;
 }
 
-export function definePageModule<TData>(
-  mod: PageModule<TData>,
-): PageModule<TData> {
+export function definePageModule(mod) {
   return mod;
 }
 `;
-}
 
 // src/path-utils.ts
 import path from "path";
@@ -625,7 +591,7 @@ function validateConcurrency(concurrency) {
 var PLUGIN_NAME = "vite-plugin-html-pages";
 var VIRTUAL_BUILD_ENTRY_ID = `\0${PLUGIN_NAME}:build-entry`;
 var VIRTUAL_PAGE_HELPER_ID = `${PLUGIN_NAME}/page`;
-var RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX = `\0${PLUGIN_NAME}/page:`;
+var RESOLVED_VIRTUAL_PAGE_HELPER_ID = `\0${VIRTUAL_PAGE_HELPER_ID}`;
 var CACHE_ROOT = "node_modules/.cache";
 var DEFAULT_PAGE_EXTENSIONS = [
   ".ht.js",
@@ -1332,19 +1298,19 @@ async function loadUserConfig(args) {
     userPlugins: plugins.filter((plugin) => plugin.name !== PLUGIN_NAME)
   };
 }
-function createPageHelperPlugin(getPages) {
+function createPageHelperPlugin() {
   return {
     name: `${PLUGIN_NAME}:page-helper`,
     resolveId(id, importer) {
-      if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
-        return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
+      if (id === VIRTUAL_PAGE_HELPER_ID) {
+        return RESOLVED_VIRTUAL_PAGE_HELPER_ID;
       }
       if (importer && isLocalPageTypesImport(id)) {
         return `${VIRTUAL_LOCAL_TYPES_PREFIX}${importer}::${id}`;
       }
       return resolveEscapedPageId(id);
     },
-    async load(id) {
+    load(id) {
       const escapedPage = loadEscapedPage(id);
       if (escapedPage) return escapedPage;
       if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {
@@ -1357,23 +1323,15 @@ export {
 } from 'vite-plugin-html-pages/page';
 `;
       }
-      if (!id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
-        return null;
+      if (id === RESOLVED_VIRTUAL_PAGE_HELPER_ID) {
+        return PAGE_HELPER_MODULE_SOURCE;
       }
-      const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
-      const pages = await getPages();
-      const normalizedImporter = path5.resolve(
-        pageFileFromModuleId(importer) ?? importer
-      );
-      const page = pages.find(
-        (candidate) => path5.resolve(candidate.absolutePath) === normalizedImporter
-      );
-      return generateTypedPageHelper(page);
+      return null;
     }
   };
 }
 async function createPageModuleLoader(args) {
-  const { mode, root, server, getPages } = args;
+  const { mode, root, server } = args;
   if (mode === "dev") {
     if (!server) {
       throw new Error(brand("dev server not available"));
@@ -1383,9 +1341,6 @@ async function createPageModuleLoader(args) {
       close: async () => {
       }
     };
-  }
-  if (!getPages) {
-    throw new Error(brand("getPages is required in build mode"));
   }
   const configMode = args.configMode ?? "production";
   const { userConfig, userPlugins } = await loadUserConfig({
@@ -1413,7 +1368,7 @@ async function createPageModuleLoader(args) {
       middlewareMode: true,
       watch: null
     },
-    plugins: [...userPlugins, createPageHelperPlugin(getPages)]
+    plugins: [...userPlugins, createPageHelperPlugin()]
   };
   const buildServer = await createServer(config);
   return {
@@ -2461,7 +2416,6 @@ function htPages(options = {}) {
     const loader = await createPageModuleLoader({
       mode: "build",
       root,
-      getPages: async () => entries,
       configFile: userConfigFile,
       configMode: resolvedMode,
       base: resolvedBase
@@ -2520,8 +2474,8 @@ function htPages(options = {}) {
       if (id === VIRTUAL_BUILD_ENTRY_ID) {
         return id;
       }
-      if (id === VIRTUAL_PAGE_HELPER_ID && importer) {
-        return `${RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX}${importer}`;
+      if (id === VIRTUAL_PAGE_HELPER_ID) {
+        return RESOLVED_VIRTUAL_PAGE_HELPER_ID;
       }
       if (id === VIRTUAL_JSX_RUNTIME_ID) {
         return RESOLVED_VIRTUAL_JSX_RUNTIME_ID;
@@ -2562,16 +2516,8 @@ export { Fragment, jsx, jsxs, jsxDEV } from ${JSON.stringify(
         )};
 `;
       }
-      if (id.startsWith(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX)) {
-        const importer = id.slice(RESOLVED_VIRTUAL_PAGE_HELPER_PREFIX.length);
-        const entries = await discoverEntryPages(root, options);
-        const normalizedImporter = path9.resolve(
-          pageFileFromModuleId(importer) ?? importer
-        );
-        const page = entries.find(
-          (candidate) => path9.resolve(candidate.absolutePath) === normalizedImporter
-        );
-        return generateTypedPageHelper(page);
+      if (id === RESOLVED_VIRTUAL_PAGE_HELPER_ID) {
+        return PAGE_HELPER_MODULE_SOURCE;
       }
       if (id.startsWith(VIRTUAL_LOCAL_TYPES_PREFIX)) {
         return `

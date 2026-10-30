@@ -34,7 +34,7 @@ export function pageModuleUrl(entryPath: string, relativePath: string): string {
 }
 
 /** The page file an escaped page module id stands for, or `null`. */
-export function pageFileFromModuleId(id: string): string | null {
+function pageFileFromModuleId(id: string): string | null {
   if (!id.includes(ESCAPED_QUESTION_MARK)) return null;
 
   const file = id.split(ESCAPED_QUESTION_MARK).join('?');
