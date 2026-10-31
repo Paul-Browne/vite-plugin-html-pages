@@ -1,10 +1,12 @@
 import fs from 'node:fs';
+import type { ServerResponse } from 'node:http';
 import path from 'node:path';
-import type { ViteDevServer } from 'vite';
+import type { Connect, ViteDevServer } from 'vite';
 import { fileURLToPath } from 'node:url';
 
 import { renderPage } from './render-runtime.js';
-import { matchDynamicPage } from './route-utils.js';
+import { defaultNotFoundHtml } from './not-found-page.js';
+import { matchDynamicPage, NOT_FOUND_ROUTE } from './route-utils.js';
 import type { HtPageInfo, HtPagesPluginOptions } from './types.js';
 import { brand } from './brand.js';
 import { createPageModuleLoader } from './module-loader.js';
@@ -84,6 +86,7 @@ function shouldSkipHtmlRouting(url: string, pagesDir: string): boolean {
   return (
     url.startsWith('/@vite') ||
     url.startsWith('/@fs/') ||
+    url.startsWith('/@id/') ||
     url.startsWith('/node_modules/') ||
     url.startsWith(`/${pagesDir}/`) ||
     url === '/favicon.ico' ||
@@ -135,6 +138,38 @@ function rewriteRootAssetUrlsInDevHtml(
   );
 }
 
+/**
+ * Whether Vite's html middleware, which runs after the 404 below, will
+ * serve this request. Vite's html fallback has pointed it at an `.html`
+ * file under Vite's root if there is one: an `index.html` beside the
+ * pages, say.
+ */
+function isViteHtmlFile(url: string | undefined, viteRoot: string): boolean {
+  const pathname = (url ?? '').split('?')[0].split('#')[0];
+
+  if (!pathname.endsWith('.html')) return false;
+
+  try {
+    return fs.existsSync(path.join(viteRoot, decodeURIComponent(pathname)));
+  } catch {
+    return false;
+  }
+}
+
+function sendHtml(res: ServerResponse, statusCode: number, html: string): void {
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.end(html);
+}
+
+/**
+ * Serve pages from the dev server.
+ *
+ * Returns the hook that answers a URL with no page behind it, for the
+ * plugin's `configureServer` to hand back to Vite, which runs it after
+ * its own middlewares: a miss is only a miss once Vite has had its turn
+ * at `public/` and the rest.
+ */
 export function installDevServer(args: {
   server: ViteDevServer;
   root: string;
@@ -142,7 +177,7 @@ export function installDevServer(args: {
   options: HtPagesPluginOptions;
   getPages: () => Promise<HtPageInfo[]>;
   getEntries?: () => Promise<HtPageInfo[]>;
-}) {
+}): () => void {
   const { server, root, pagesDir, options, getPages, getEntries } = args;
   const toolbarEnabled = resolveDevToolbarEnabled(options);
   const loaderPromise = createPageModuleLoader({
@@ -150,6 +185,60 @@ export function installDevServer(args: {
     root,
     server,
   });
+
+  // Requests no page matched, by their route path.
+  const misses = new WeakMap<Connect.IncomingMessage, string>();
+
+  /** A page as the dev server serves it, or `null` if its module did not load. */
+  async function renderDevHtml(
+    page: HtPageInfo,
+    url: string,
+    req: Connect.IncomingMessage,
+  ): Promise<string | null> {
+    const { loadModule } = await loaderPromise;
+    const mod = await loadModule(page.entryPath, page.relativePath);
+
+    if (!mod) return null;
+
+    const html = await renderPage(page, mod, true);
+
+    const devHtml = rewriteRootAssetUrlsInDevHtml(
+      html,
+      root,
+      pagesDir,
+    );
+
+    let transformedHtml = await server.transformIndexHtml(
+      url,
+      devHtml,
+      req.originalUrl,
+    );
+
+    if (toolbarEnabled) {
+      transformedHtml = injectDevToolbar(
+        transformedHtml,
+        buildDevToolbarInfo({
+          page,
+          options,
+          pluginVersion: PLUGIN_VERSION,
+        }),
+      );
+    }
+
+    return transformedHtml;
+  }
+
+  function renderFailed(error: unknown, next: Connect.NextFunction): void {
+    server.config.logger.error(
+      brand(
+        `dev server render failed: ${
+          error instanceof Error ? error.stack ?? error.message : String(error)
+        }`,
+      ),
+    );
+
+    next(error as Error);
+  }
 
   server.middlewares.use(async (req, res, next) => {
     try {
@@ -197,54 +286,55 @@ export function installDevServer(args: {
       }
 
       if (!page) {
+        misses.set(req, url);
         return next();
       }
 
-      const { loadModule } = await loaderPromise;
-      const mod = await loadModule(page.entryPath, page.relativePath);
+      const html = await renderDevHtml(page, url, req);
 
-      if (!mod) {
+      if (html === null) {
         return next();
       }
 
-      const html = await renderPage(page, mod, true);
-
-      const devHtml = rewriteRootAssetUrlsInDevHtml(
-        html,
-        root,
-        pagesDir,
-      );
-      
-      let transformedHtml = await server.transformIndexHtml(
-        url,
-        devHtml,
-        req.originalUrl,
-      );
-
-      if (toolbarEnabled) {
-        transformedHtml = injectDevToolbar(
-          transformedHtml,
-          buildDevToolbarInfo({
-            page,
-            options,
-            pluginVersion: PLUGIN_VERSION,
-          }),
-        );
-      }
-
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.end(transformedHtml);
+      sendHtml(res, 200, html);
     } catch (error) {
-      server.config.logger.error(
-        brand(
-          `dev server render failed: ${
-            error instanceof Error ? error.stack ?? error.message : String(error)
-          }`,
-        ),
-      );
-
-      next(error as Error);
+      renderFailed(error, next);
     }
   });
+
+  return () => {
+    // Vite ends a miss with an empty 404 only for these app types; with
+    // `custom`, it falls through to whatever server the dev server is
+    // mounted in, and stays that server's to answer.
+    const { appType } = server.config;
+    if (appType !== 'spa' && appType !== 'mpa') return;
+
+    server.middlewares.use(async (req, res, next) => {
+      const url = misses.get(req);
+
+      if (url === undefined || isViteHtmlFile(req.url, server.config.root)) {
+        return next();
+      }
+
+      try {
+        // What the build writes to 404.html, and a static host serves
+        // for a miss: the site's own 404 page, or the default.
+        const notFoundPage = (await getPages()).find(
+          (p) => p.routePath === NOT_FOUND_ROUTE,
+        );
+
+        const html =
+          (notFoundPage && (await renderDevHtml(notFoundPage, url, req))) ??
+          (await server.transformIndexHtml(
+            url,
+            defaultNotFoundHtml(server.config.base),
+            req.originalUrl,
+          ));
+
+        sendHtml(res, 404, html);
+      } catch (error) {
+        renderFailed(error, next);
+      }
+    });
+  };
 }

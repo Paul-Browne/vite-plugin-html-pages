@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { defaultNotFoundHtml } from '../src/plugin';
+import { defaultNotFoundHtml } from '../src/not-found-page';
 
 function homeHref(html: string): string | undefined {
   return html.match(/<a href="([^"]*)">Go back home<\/a>/)?.[1];
