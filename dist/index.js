@@ -1197,6 +1197,55 @@ async function renderPage(page, mod, dev = false) {
   }
 }
 
+// src/not-found-page.ts
+function defaultNotFoundHtml(base) {
+  const home = base.endsWith("/") ? base : `${base}/`;
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>404 - Page Not Found</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+      }
+      main {
+        max-width: 40rem;
+        text-align: center;
+      }
+      h1 {
+        font-size: 3rem;
+        margin: 0 0 1rem;
+      }
+      p {
+        margin: 0.5rem 0;
+        line-height: 1.5;
+      }
+      a {
+        color: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>404</h1>
+      <p>Page not found.</p>
+      <p><a href="${home}">Go back home</a></p>
+    </main>
+  </body>
+</html>
+`;
+}
+
 // src/module-loader.ts
 import path5 from "path";
 import {
@@ -1634,7 +1683,7 @@ function stripDevBase(url, base, middlewareMode) {
   return middlewareMode ? { url, base: "/" } : null;
 }
 function shouldSkipHtmlRouting(url, pagesDir) {
-  return url.startsWith("/@vite") || url.startsWith("/@fs/") || url.startsWith("/node_modules/") || url.startsWith(`/${pagesDir}/`) || url === "/favicon.ico" || isStaticAssetRequest(url);
+  return url.startsWith("/@vite") || url.startsWith("/@fs/") || url.startsWith("/@id/") || url.startsWith("/node_modules/") || url.startsWith(`/${pagesDir}/`) || url === "/favicon.ico" || isStaticAssetRequest(url);
 }
 function hasDotDotSegment(url) {
   return url.split("/").includes("..");
@@ -1663,6 +1712,20 @@ function rewriteRootAssetUrlsInDevHtml(html, root, pagesDir) {
     }
   );
 }
+function isViteHtmlFile(url, viteRoot) {
+  const pathname = (url ?? "").split("?")[0].split("#")[0];
+  if (!pathname.endsWith(".html")) return false;
+  try {
+    return fs4.existsSync(path6.join(viteRoot, decodeURIComponent(pathname)));
+  } catch {
+    return false;
+  }
+}
+function sendHtml(res, statusCode, html) {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.end(html);
+}
 function installDevServer(args) {
   const { server, root, pagesDir, options, getPages, getEntries } = args;
   const toolbarEnabled = resolveDevToolbarEnabled(options);
@@ -1671,6 +1734,42 @@ function installDevServer(args) {
     root,
     server
   });
+  const misses = /* @__PURE__ */ new WeakMap();
+  async function renderDevHtml(page, url, req) {
+    const { loadModule } = await loaderPromise;
+    const mod = await loadModule(page.entryPath, page.relativePath);
+    if (!mod) return null;
+    const html = await renderPage(page, mod, true);
+    const devHtml = rewriteRootAssetUrlsInDevHtml(
+      html,
+      root,
+      pagesDir
+    );
+    let transformedHtml = await server.transformIndexHtml(
+      url,
+      devHtml,
+      req.originalUrl
+    );
+    if (toolbarEnabled) {
+      transformedHtml = injectDevToolbar(
+        transformedHtml,
+        buildDevToolbarInfo({
+          page,
+          options,
+          pluginVersion: PLUGIN_VERSION
+        })
+      );
+    }
+    return transformedHtml;
+  }
+  function renderFailed(error, next) {
+    server.config.logger.error(
+      brand(
+        `dev server render failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
+      )
+    );
+    next(error);
+  }
   server.middlewares.use(async (req, res, next) => {
     try {
       const request = stripDevBase(
@@ -1699,46 +1798,41 @@ function installDevServer(args) {
         page = matchDynamicPage(await getEntries(), url) ?? void 0;
       }
       if (!page) {
+        misses.set(req, url);
         return next();
       }
-      const { loadModule } = await loaderPromise;
-      const mod = await loadModule(page.entryPath, page.relativePath);
-      if (!mod) {
+      const html = await renderDevHtml(page, url, req);
+      if (html === null) {
         return next();
       }
-      const html = await renderPage(page, mod, true);
-      const devHtml = rewriteRootAssetUrlsInDevHtml(
-        html,
-        root,
-        pagesDir
-      );
-      let transformedHtml = await server.transformIndexHtml(
-        url,
-        devHtml,
-        req.originalUrl
-      );
-      if (toolbarEnabled) {
-        transformedHtml = injectDevToolbar(
-          transformedHtml,
-          buildDevToolbarInfo({
-            page,
-            options,
-            pluginVersion: PLUGIN_VERSION
-          })
-        );
-      }
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.end(transformedHtml);
+      sendHtml(res, 200, html);
     } catch (error) {
-      server.config.logger.error(
-        brand(
-          `dev server render failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`
-        )
-      );
-      next(error);
+      renderFailed(error, next);
     }
   });
+  return () => {
+    const { appType } = server.config;
+    if (appType !== "spa" && appType !== "mpa") return;
+    server.middlewares.use(async (req, res, next) => {
+      const url = misses.get(req);
+      if (url === void 0 || isViteHtmlFile(req.url, server.config.root)) {
+        return next();
+      }
+      try {
+        const notFoundPage = (await getPages()).find(
+          (p) => p.routePath === NOT_FOUND_ROUTE
+        );
+        const html = (notFoundPage && await renderDevHtml(notFoundPage, url, req)) ?? await server.transformIndexHtml(
+          url,
+          defaultNotFoundHtml(server.config.base),
+          req.originalUrl
+        );
+        sendHtml(res, 404, html);
+      } catch (error) {
+        renderFailed(error, next);
+      }
+    });
+  };
 }
 
 // src/html-asset-validator.ts
@@ -2293,53 +2387,6 @@ function chunkArray(items, size) {
   }
   return out;
 }
-function defaultNotFoundHtml(base) {
-  const home = base.endsWith("/") ? base : `${base}/`;
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>404 - Page Not Found</title>
-    <style>
-      :root {
-        color-scheme: light dark;
-      }
-      body {
-        margin: 0;
-        font-family: system-ui, sans-serif;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        padding: 2rem;
-      }
-      main {
-        max-width: 40rem;
-        text-align: center;
-      }
-      h1 {
-        font-size: 3rem;
-        margin: 0 0 1rem;
-      }
-      p {
-        margin: 0.5rem 0;
-        line-height: 1.5;
-      }
-      a {
-        color: inherit;
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>404</h1>
-      <p>Page not found.</p>
-      <p><a href="${home}">Go back home</a></p>
-    </main>
-  </body>
-</html>
-`;
-}
 function isHtJsxFile(id) {
   return id.endsWith(".ht.jsx") || id.endsWith(".html.jsx") || id.endsWith(".ht.tsx") || id.endsWith(".html.tsx");
 }
@@ -2594,7 +2641,7 @@ export {
     },
     configureServer(_server) {
       server = _server;
-      installDevServer({
+      const serveNotFound = installDevServer({
         server,
         root,
         pagesDir,
@@ -2648,6 +2695,7 @@ export {
           })
         );
       });
+      return serveNotFound;
     },
     async generateBundle(_, bundle) {
       try {
